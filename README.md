@@ -380,10 +380,12 @@ ones). `read` returns their **metadata** (name, size); `read-file` returns the *
 2. `read-file` with that entity + `Id` → `{ fileName, contentType, sizeBytes, base64 }`.
 3. Decode the base64 to reconstruct the file.
 
-Downloads above `maxBytes` (default 10 MB, hard cap 50 MB) fail fast with `creatio_file_too_large`
-so an oversized attachment never floods the transport. The tool is read-only (available under
-`CREATIO_MCP_READONLY=true`) and uses the OData file API (`GET /0/odata/<Entity>(<id>)/Data`), so it
-works under either CRUD backend.
+Downloads above `maxBytes` (default 10 MB = 10,000,000 bytes; hard cap 50 MB = 50,000,000, enforced
+in the provider too) are refused with `creatio_file_too_large` — up front via `Content-Length` when
+Creatio declares one, otherwise the streaming read stops the moment the limit is crossed, so an
+oversized attachment never floods the transport or the server's memory. The tool is read-only
+(available under `CREATIO_MCP_READONLY=true`) and uses the OData file API
+(`GET /0/odata/<Entity>(<id>)/Data`), so it works under either CRUD backend.
 
 ### DataForge tools (registered only when DataForge is enabled)
 

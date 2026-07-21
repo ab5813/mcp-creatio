@@ -12,12 +12,17 @@ All notable changes to **mcp-creatio** are documented here. The format follows
   the binary content of Creatio file attachments (`ActivityFile`, `AccountFile`, custom
   `<Section>File` entities) via the OData file API (`GET /0/odata/<Entity>(<id>)/Data`) and returns
   it base64-encoded with `fileName` / `contentType` / `sizeBytes` metadata. Guarded by a `maxBytes`
-  limit (default 10 MB, hard cap 50 MB; refused with `creatio_file_too_large`), registered in
-  readonly mode, and delivered through a new `FileProvider` contract + `FileServiceProvider` +
-  `FileEngine` following the one-contract/one-provider/one-engine-per-domain pattern. The result
-  deliberately bypasses the output secret-scrubber (a multi-megabyte base64 stream can match the
-  scrubber's value patterns by chance, which would silently corrupt the file); binary bodies are
-  read with `arrayBuffer()`, never coerced to text.
+  limit (default 10 MB = 10,000,000 bytes; hard cap 50 MB = 50,000,000, clamped in the provider so
+  direct engine callers get the ceiling too; refused with `creatio_file_too_large` — up front via
+  `Content-Length` when declared, else the streaming read aborts the moment the limit is crossed).
+  Registered in readonly mode, and delivered through a new `FileProvider` contract +
+  `FileServiceProvider` + `FileEngine` following the one-contract/one-provider/one-engine-per-domain
+  pattern. Binary-safety details: bodies are streamed as bytes (never coerced to text); the tool
+  result deliberately bypasses the output secret-scrubber (a multi-megabyte base64 stream can match
+  the scrubber's value patterns by chance, which would silently corrupt the file); auth headers are
+  rebuilt inside the retry factory so the one-shot re-auth retry sends the refreshed credential; and
+  an exhausted login bounce (followed redirect to HTML) is rejected with
+  `creatio_download_file_failed:auth_bounce` instead of being returned as the file's bytes.
 
 ## [0.6.7]
 

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_FILE_DOWNLOAD_BYTES } from '../../creatio';
+
 const CRITICAL_WARNINGS = {
 	FILTER_SELECT_SYNC:
 		'⚠️ CRITICAL: When using $filter with $select:\n' +
@@ -467,10 +469,6 @@ export const describeEntityDescriptor = makeToolDescriptor({
 	inputShape: describeEntityInputShape,
 });
 
-/** Hard ceiling for `read-file` downloads — above this even an explicit `maxBytes` is rejected
- *  by the schema, because a >50 MB base64 payload is unusable as an MCP tool result anyway. */
-const MAX_FILE_DOWNLOAD_BYTES = 52_428_800;
-
 const readFileInputShape = {
 	entity: z
 		.string()
@@ -488,7 +486,7 @@ const readFileInputShape = {
 		.max(MAX_FILE_DOWNLOAD_BYTES)
 		.optional()
 		.describe(
-			'Optional size guard in bytes (default 10000000 = 10 MB, hard cap 52428800 = 50 MB). A larger file fails fast with "creatio_file_too_large" instead of flooding the transport — check Size via "read" first and raise this only when you really need the bigger file.',
+			'Optional size guard in bytes (default 10000000 = 10 MB, hard cap 50000000 = 50 MB). A larger file is refused with "creatio_file_too_large" instead of flooding the transport — check Size via "read" first and raise this only when you really need the bigger file.',
 		),
 } as const;
 export const readFileInput = z.object(readFileInputShape);
@@ -503,7 +501,7 @@ export const readFileDescriptor = makeToolDescriptor({
 		'3. Decode the returned base64 to reconstruct the original file.\n\n' +
 		'Returns JSON: {"entity","id","fileName"?,"contentType"?,"sizeBytes","base64"} — "base64" holds the file bytes.\n\n' +
 		'NOTES:\n' +
-		'- Files larger than maxBytes (default 10 MB) are refused with "creatio_file_too_large"; check Size first via "read".\n' +
+		'- Files larger than maxBytes (default 10 MB, hard cap 50 MB) are refused with "creatio_file_too_large"; check Size first via "read".\n' +
 		'- Uses the Creatio OData file API (GET /0/odata/<Entity>(<id>)/Data), so it works regardless of the configured CRUD backend.\n' +
 		'- Read-only: available in readonly mode.',
 	inputShape: readFileInputShape,

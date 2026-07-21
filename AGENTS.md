@@ -99,6 +99,8 @@ CreatioServiceContext
   ├─ FeatureServiceProvider → /rest/FeatureService/ClearFeaturesCacheForAllUsers
   ├─ AdminOperationServiceProvider → /rest/RightsService/{Upsert,Delete}AdminOperation[,Grantee]
   ├─ ConfigurationServiceProvider → generic /rest/<service>/<method> caller
+  ├─ FileServiceProvider → binary attachment download via OData /0/odata/<Entity>(<id>)/Data
+  │     (streaming maxBytes guard, base64 result; backend-independent — needs only the base URL)
   └─ UserInfoProvider → UserInfoService for current user data
 ```
 
@@ -364,7 +366,7 @@ returns). Expect the call to resolve to the expected user.
   `/mcp` is open (no edge), the provider injects the M2M token. Confirm `creatio.auth.ok authKind=oauth2`.
 - `legacy`: env `…=legacy` + `CREATIO_LOGIN`/`CREATIO_PASSWORD`. Confirm `creatio.auth.ok authKind=legacy`.
 - `delegated`/`gateway`: the request must carry a Creatio credential — either `Authorization: Bearer
-  <a real Creatio token>` (mint one out-of-band, e.g. `curl -k` the client_credentials grant at
+<a real Creatio token>` (mint one out-of-band, e.g. `curl -k` the client_credentials grant at
   `<base>/0/connect/token`) or a forwarded Forms-auth session in `X-Creatio-Cookie` (POST
   `<base>/ServiceModel/AuthService.svc/Login`, then forward the Set-Cookie value; BPMCSRF is read from
   it or from an explicit `X-Creatio-Bpmcsrf`). A request with **no** credential must get `401`;

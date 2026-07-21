@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	DEFAULT_MAX_FILE_BYTES,
 	FileServiceProvider,
+	MAX_FILE_DOWNLOAD_BYTES,
 } from '../../src/creatio/services/file-service-provider';
 import { makeHttpClientHarness } from '../support/http-client';
 
@@ -71,6 +72,57 @@ describe('FileServiceProvider download', () => {
 		expect(result.fileName).toBe('dokuments nr.1.docx');
 	});
 
+	it('prefers the RFC 5987 name over a plain ASCII fallback regardless of parameter order', async () => {
+		// The standard compatibility ordering (RFC 6266 App. D): plain fallback FIRST.
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array([1]), {
+				'content-disposition':
+					'attachment; filename="l?gums.docx"; filename*=UTF-8\'\'l%C4%ABgums.docx',
+			}),
+		);
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(result.fileName).toBe('līgums.docx');
+	});
+
+	it('keeps semicolons inside a quoted plain filename', async () => {
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array([1]), {
+				'content-disposition': 'attachment; filename="a;b.pdf"',
+			}),
+		);
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(result.fileName).toBe('a;b.pdf');
+	});
+
+	it('returns the raw plain filename when it is not valid percent-encoding', async () => {
+		// A literal % in a PLAIN name must not be percent-decoded (and must not throw).
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array([1]), {
+				'content-disposition': 'attachment; filename="100%.pdf"',
+			}),
+		);
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(result.fileName).toBe('100%.pdf');
+	});
+
+	it('returns the raw extended filename when its percent-encoding is malformed', async () => {
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array([1]), {
+				'content-disposition': "attachment; filename*=UTF-8''bad%ZZname.pdf",
+			}),
+		);
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(result.fileName).toBe('bad%ZZname.pdf');
+	});
+
+	it('leaves fileName undefined for a bare Content-Disposition without a filename', async () => {
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array([1]), { 'content-disposition': 'attachment' }),
+		);
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(result.fileName).toBeUndefined();
+	});
+
 	it('refuses a file whose declared Content-Length exceeds maxBytes before buffering', async () => {
 		const { provider } = makeProvider(() =>
 			binaryResponse(new Uint8Array(10), { 'content-length': '99999999' }),
@@ -94,6 +146,62 @@ describe('FileServiceProvider download', () => {
 		);
 		await expect(provider.download({ entity: 'ActivityFile', id: GUID })).rejects.toThrow(
 			/creatio_file_too_large/,
+		);
+	});
+
+	it('an explicit maxBytes admits a file the default would refuse (the raise-the-limit window)', async () => {
+		const size = DEFAULT_MAX_FILE_BYTES + 1;
+		const body = new Uint8Array(size);
+		const { provider } = makeProvider(() =>
+			binaryResponse(body, { 'content-length': String(size) }),
+		);
+		const result = await provider.download({
+			entity: 'ActivityFile',
+			id: GUID,
+			maxBytes: 20_000_000,
+		});
+		expect(result.sizeBytes).toBe(size);
+	});
+
+	it('clamps an explicit maxBytes above the hard ceiling', async () => {
+		// Direct engine callers must not be able to exceed MAX_FILE_DOWNLOAD_BYTES either.
+		const declared = MAX_FILE_DOWNLOAD_BYTES + 1;
+		const { provider } = makeProvider(() =>
+			binaryResponse(new Uint8Array(1), { 'content-length': String(declared) }),
+		);
+		await expect(
+			provider.download({
+				entity: 'ActivityFile',
+				id: GUID,
+				maxBytes: MAX_FILE_DOWNLOAD_BYTES * 10,
+			}),
+		).rejects.toThrow(/creatio_file_too_large/);
+	});
+
+	it('retries once through fetchWithAuth on a 401 and then succeeds', async () => {
+		const bytes = new TextEncoder().encode('ok');
+		let attempt = 0;
+		const { provider, calls } = makeProvider(() => {
+			attempt += 1;
+			return attempt === 1
+				? new Response('unauthorized', { status: 401 })
+				: binaryResponse(bytes, { 'content-type': 'application/octet-stream' });
+		});
+		const result = await provider.download({ entity: 'ActivityFile', id: GUID });
+		expect(calls).toHaveLength(2);
+		expect(result.base64).toBe(Buffer.from('ok').toString('base64'));
+	});
+
+	it('rejects an exhausted login bounce instead of returning the login page as file bytes', async () => {
+		const html = new TextEncoder().encode('<html><body>Please log in</body></html>');
+		const { provider } = makeProvider(() => {
+			const response = binaryResponse(html, { 'content-type': 'text/html; charset=utf-8' });
+			// A followed redirect to the login page: fetch reports redirected=true, status 200.
+			Object.defineProperty(response, 'redirected', { value: true });
+			return response;
+		});
+		await expect(provider.download({ entity: 'ActivityFile', id: GUID })).rejects.toThrow(
+			/auth_bounce/,
 		);
 	});
 

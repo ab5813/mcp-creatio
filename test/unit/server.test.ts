@@ -145,6 +145,30 @@ describe('Server tool handlers (read path)', () => {
 		});
 	});
 
+	it('read-file enforces the 50 MB hard cap at the schema boundary', async () => {
+		const { handlers, context } = buildServer();
+		// Above the cap: rejected by zod before the provider is ever called.
+		await expect(
+			callTool(handlers, 'read-file', {
+				entity: 'ActivityFile',
+				id: GUID,
+				maxBytes: 50_000_001,
+			}),
+		).rejects.toThrow();
+		expect(context.file.download).not.toHaveBeenCalled();
+		// Exactly at the cap: accepted and forwarded.
+		await callTool(handlers, 'read-file', {
+			entity: 'ActivityFile',
+			id: GUID,
+			maxBytes: 50_000_000,
+		});
+		expect(context.file.download).toHaveBeenCalledWith({
+			entity: 'ActivityFile',
+			id: GUID,
+			maxBytes: 50_000_000,
+		});
+	});
+
 	it('compiles structured filters to a FilterNode and carries raw $filter as an OData extra', async () => {
 		const { handlers, context } = buildServer();
 		await callTool(handlers, 'read', {
