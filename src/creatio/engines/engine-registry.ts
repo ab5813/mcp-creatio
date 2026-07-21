@@ -5,6 +5,7 @@ export enum EngineType {
 	Configuration = 'configuration',
 	Crud = 'crud',
 	Feature = 'feature',
+	File = 'file',
 	Process = 'process',
 	SysSettings = 'sys-settings',
 	User = 'user',

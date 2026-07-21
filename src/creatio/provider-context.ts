@@ -4,6 +4,7 @@ import {
 	ConfigurationProvider,
 	CrudProvider,
 	FeatureProvider,
+	FileProvider,
 	ProcessProvider,
 	SysSettingsProvider,
 	UserProvider,
@@ -15,6 +16,7 @@ export interface CreatioProviderContext {
 	configuration: ConfigurationProvider;
 	crud: CrudProvider;
 	feature: FeatureProvider;
+	file: FileProvider;
 	process: ProcessProvider;
 	sysSettings: SysSettingsProvider;
 	user: UserProvider;

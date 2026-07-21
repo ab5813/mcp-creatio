@@ -5,6 +5,7 @@ import {
 	ConfigurationProvider,
 	CrudProvider,
 	FeatureProvider,
+	FileProvider,
 	ProcessProvider,
 	SysSettingsProvider,
 	UserProvider,
@@ -16,6 +17,7 @@ import { ClientCacheHashClient } from './client-cache-hash-client';
 import { ConfigurationServiceProvider } from './configuration-service-provider';
 import { createCrudProvider } from './crud-provider-factory';
 import { FeatureServiceProvider } from './feature-service-provider';
+import { FileServiceProvider } from './file-service-provider';
 import { CreatioHttpClient } from './http-client';
 import { ODataMetadataStore } from './odata/metadata-store';
 import { ProcessServiceProvider } from './process-service-provider';
@@ -34,6 +36,7 @@ export class CreatioServiceContext implements CreatioProviderContext {
 	public readonly configuration: ConfigurationProvider;
 	public readonly crud: CrudProvider;
 	public readonly feature: FeatureProvider;
+	public readonly file: FileProvider;
 	public readonly process: ProcessProvider;
 	public readonly sysSettings: SysSettingsProvider;
 	public readonly user: UserProvider;
@@ -59,6 +62,7 @@ export class CreatioServiceContext implements CreatioProviderContext {
 			freshness: this._freshness,
 		});
 		this.feature = new FeatureServiceProvider(this._httpClient);
+		this.file = new FileServiceProvider(this._httpClient);
 		this.process = new ProcessServiceProvider(this._httpClient);
 		this.sysSettings = new SysSettingsServiceProvider(this._httpClient);
 		this.user = new UserInfoProvider(this._httpClient);

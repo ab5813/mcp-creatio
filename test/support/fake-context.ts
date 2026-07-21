@@ -68,6 +68,17 @@ export function makeFakeContext(authType: AuthProviderType = AuthProviderType.Le
 			kind: 'feature',
 			clearFeaturesCache: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
 		},
+		file: {
+			kind: 'file',
+			download: vi.fn().mockResolvedValue({
+				entity: 'ActivityFile',
+				id: '22222222-2222-2222-2222-222222222222',
+				fileName: 'notes.txt',
+				contentType: 'text/plain',
+				sizeBytes: 5,
+				base64: 'aGVsbG8=',
+			}),
+		},
 		adminOperation: {
 			kind: 'admin-operation',
 			upsertAdminOperation: vi.fn().mockResolvedValue({ success: true, id: 'op-1' }),

@@ -345,6 +345,7 @@ works unchanged on both backends.
 | `list-entities`                  | List all available entity sets                                                                                                                           |
 | `describe-entity`                | Get schema for an entity (fields, types, keys). Routes through DataForge for richer column details when it is enabled, otherwise exact OData `$metadata` |
 | `read`                           | Query records: filters, select, expand, ordering, pagination (skip/top) and total count                                                                  |
+| `read-file`                      | Download the binary content of a file attachment (base64) via the OData file API — e.g. documents on `ActivityFile` / `AccountFile`                      |
 | `create`                         | Create a new record                                                                                                                                      |
 | `update`                         | Update an existing record                                                                                                                                |
 | `delete`                         | Delete a record                                                                                                                                          |
@@ -369,6 +370,20 @@ Ask for exactly the data you need — the AI doesn't have to know OData:
 - **Filter by related records naturally** — by name (`Contact/Name = "Andrew Baker"`) or by id.
 - **Sort**, **paginate** (page size + offset), and **count** matches in one call.
 - **Pull in related data** in a single request (e.g. an order with its account and contact).
+
+### Reading file attachments with `read-file`
+
+Attachments live in `<Section>File` entities (`ActivityFile`, `AccountFile`, `ContactFile`, custom
+ones). `read` returns their **metadata** (name, size); `read-file` returns the **bytes**:
+
+1. `read` on the file entity, selecting `["Id","Name","Size"]`, to locate the attachment.
+2. `read-file` with that entity + `Id` → `{ fileName, contentType, sizeBytes, base64 }`.
+3. Decode the base64 to reconstruct the file.
+
+Downloads above `maxBytes` (default 10 MB, hard cap 50 MB) fail fast with `creatio_file_too_large`
+so an oversized attachment never floods the transport. The tool is read-only (available under
+`CREATIO_MCP_READONLY=true`) and uses the OData file API (`GET /0/odata/<Entity>(<id>)/Data`), so it
+works under either CRUD backend.
 
 ### DataForge tools (registered only when DataForge is enabled)
 

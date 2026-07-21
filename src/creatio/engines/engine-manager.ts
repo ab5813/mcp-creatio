@@ -4,6 +4,7 @@ import {
 	ConfigurationProvider,
 	CrudProvider,
 	FeatureProvider,
+	FileProvider,
 	ProcessProvider,
 	SysSettingsProvider,
 	UserProvider,
@@ -16,6 +17,7 @@ import { CrudEngine } from './crud-engine';
 import { CreatioEngine, EngineEnv } from './engine';
 import { EngineRegistry, EngineType } from './engine-registry';
 import { FeatureEngine } from './feature-engine';
+import { FileEngine } from './file-engine';
 import { ProcessEngine } from './process-engine';
 import { SysSettingsEngine } from './sys-settings-engine';
 import { UserEngine } from './user-engine';
@@ -25,6 +27,7 @@ export interface EngineManagerOptions {
 	configurationProvider?: ConfigurationProvider;
 	crudProvider?: CrudProvider;
 	featureProvider?: FeatureProvider;
+	fileProvider?: FileProvider;
 	processProvider?: ProcessProvider;
 	sysSettingsProvider?: SysSettingsProvider;
 	userProvider?: UserProvider;
@@ -32,6 +35,7 @@ export interface EngineManagerOptions {
 	enableConfiguration?: boolean;
 	enableCrud?: boolean;
 	enableFeature?: boolean;
+	enableFile?: boolean;
 	enableProcess?: boolean;
 	enableSysSettings?: boolean;
 	enableUser?: boolean;
@@ -73,6 +77,10 @@ export class CreatioEngineManager {
 
 	public get feature(): FeatureEngine {
 		return this._registry.require<FeatureEngine>(EngineType.Feature);
+	}
+
+	public get file(): FileEngine {
+		return this._registry.require<FileEngine>(EngineType.File);
 	}
 
 	public get process(): ProcessEngine {
@@ -135,6 +143,11 @@ export class CreatioEngineManager {
 					this._env,
 				),
 			this._options?.enableFeature ?? true,
+		);
+		this._registerEngine(
+			EngineType.File,
+			() => new FileEngine(this._options?.fileProvider ?? this._context.file, this._env),
+			this._options?.enableFile ?? true,
 		);
 		this._registerEngine(
 			EngineType.Process,

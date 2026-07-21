@@ -4,6 +4,21 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`read-file` tool — download file attachment content** — a new read-only core tool that fetches
+  the binary content of Creatio file attachments (`ActivityFile`, `AccountFile`, custom
+  `<Section>File` entities) via the OData file API (`GET /0/odata/<Entity>(<id>)/Data`) and returns
+  it base64-encoded with `fileName` / `contentType` / `sizeBytes` metadata. Guarded by a `maxBytes`
+  limit (default 10 MB, hard cap 50 MB; refused with `creatio_file_too_large`), registered in
+  readonly mode, and delivered through a new `FileProvider` contract + `FileServiceProvider` +
+  `FileEngine` following the one-contract/one-provider/one-engine-per-domain pattern. The result
+  deliberately bypasses the output secret-scrubber (a multi-megabyte base64 stream can match the
+  scrubber's value patterns by chance, which would silently corrupt the file); binary bodies are
+  read with `arrayBuffer()`, never coerced to text.
+
 ## [0.6.7]
 
 Credential flexibility and multi-tenant hardening: `gateway`/`delegated` now accept a forwarded

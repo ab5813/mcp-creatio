@@ -51,6 +51,8 @@ import {
 	listEntitiesInput,
 	querySysSettingsDescriptor,
 	querySysSettingsInput,
+	readFileDescriptor,
+	readFileInput,
 	refreshFeatureCacheDescriptor,
 	refreshFeatureCacheInput,
 	setAdminOperationGranteeDescriptor,
@@ -353,7 +355,7 @@ export class Server {
 	 * separately and only registered when not in readonly mode.
 	 */
 	private _clientToolDefs(): { core: ClientToolDef[]; mutating: ClientToolDef[] } {
-		const { crud, user, sysSettings, process, feature, adminOperation, configuration } =
+		const { crud, user, sysSettings, process, feature, file, adminOperation, configuration } =
 			this._engines;
 		const core: ClientToolDef[] = [
 			{
@@ -379,6 +381,26 @@ export class Server {
 				descriptor: buildReadDescriptor(crud.capabilities),
 				input: buildReadInput(crud.capabilities),
 				run: (args) => this._read(args),
+			},
+			{
+				name: 'read-file',
+				descriptor: readFileDescriptor,
+				input: readFileInput,
+				run: async ({ entity, id, maxBytes }) => {
+					const result = await file.download({
+						entity,
+						id,
+						...(maxBytes !== undefined ? { maxBytes } : {}),
+					});
+					// Pre-wrap the MCP envelope so the base64 payload bypasses redactSecrets:
+					// on a multi-megabyte base64 stream the scrubber's `pwd=`/`secret=` value
+					// patterns statistically WILL match by chance and would silently corrupt
+					// the file. The payload is machine-generated metadata + base64 — it cannot
+					// carry a header-shaped credential by construction.
+					return {
+						content: [{ type: 'text', text: JSON.stringify(result) }],
+					};
+				},
 			},
 			{
 				name: 'query-sys-settings',

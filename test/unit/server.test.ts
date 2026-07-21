@@ -32,6 +32,7 @@ describe('Server tool registration', () => {
 			'list-entities',
 			'describe-entity',
 			'read',
+			'read-file',
 			'query-sys-settings',
 			'create',
 			'update',
@@ -67,6 +68,8 @@ describe('Server tool registration', () => {
 	it('omits write tools in readonly mode', () => {
 		const { handlers } = buildServer(true);
 		expect(handlers.has('read')).toBe(true);
+		// read-file is a read: it must survive readonly mode like every other core tool.
+		expect(handlers.has('read-file')).toBe(true);
 		expect(handlers.has('get-current-user-info')).toBe(true);
 		for (const name of [
 			'create',
@@ -86,6 +89,7 @@ describe('Server tool registration', () => {
 		expect(engines.process.kind).toBe('process');
 		expect(engines.sysSettings.kind).toBe('sys-settings');
 		expect(engines.feature.kind).toBe('feature');
+		expect(engines.file.kind).toBe('file');
 		expect(engines.adminOperation.kind).toBe('admin-operation');
 		expect(engines.configuration.kind).toBe('configuration');
 	});
@@ -113,6 +117,32 @@ describe('Server tool handlers (read path)', () => {
 		const { handlers, context } = buildServer();
 		await callTool(handlers, 'describe-entity', { entitySet: 'Contact' });
 		expect(context.crud.describeEntity).toHaveBeenCalledWith('Contact');
+	});
+
+	it('read-file delegates to the file provider and pre-wraps the MCP envelope', async () => {
+		const { handlers, context } = buildServer();
+		const res = await callTool(handlers, 'read-file', { entity: 'ActivityFile', id: GUID });
+		expect(context.file.download).toHaveBeenCalledWith({ entity: 'ActivityFile', id: GUID });
+		// Unlike other handlers, read-file returns a pre-wrapped envelope so the base64
+		// payload skips redactSecrets (which could corrupt it); assert the wrapped shape.
+		const payload = JSON.parse(res.content[0].text) as Record<string, unknown>;
+		expect(payload.base64).toBe('aGVsbG8=');
+		expect(payload.fileName).toBe('notes.txt');
+		expect(payload.sizeBytes).toBe(5);
+	});
+
+	it('read-file forwards an explicit maxBytes to the provider', async () => {
+		const { handlers, context } = buildServer();
+		await callTool(handlers, 'read-file', {
+			entity: 'ActivityFile',
+			id: GUID,
+			maxBytes: 1024,
+		});
+		expect(context.file.download).toHaveBeenCalledWith({
+			entity: 'ActivityFile',
+			id: GUID,
+			maxBytes: 1024,
+		});
 	});
 
 	it('compiles structured filters to a FilterNode and carries raw $filter as an OData extra', async () => {

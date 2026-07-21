@@ -15,6 +15,7 @@ export * from './dataservice/data-service-transport';
 export * from './dataservice/data-service-schema';
 export * from './dataservice/data-service-crud-provider';
 export * from './feature-service-provider';
+export * from './file-service-provider';
 export * from './http-client';
 export * from './odata/metadata-store';
 export * from './odata/odata-crud-provider';
