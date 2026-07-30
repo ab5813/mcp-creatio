@@ -20,6 +20,15 @@ ENV CREATIO_MCP_PORT=3000
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+
+# OCR language data for scanned-PDF extraction (read-file format:"text").
+# Bundled at build time so an offline/air-gapped runtime never fetches from the
+# tessdata CDN. lav+eng+rus match the CREATIO_MCP_OCR_LANGS default.
+RUN mkdir -p /app/tessdata && \
+	wget -q -O /app/tessdata/lav.traineddata https://github.com/tesseract-ocr/tessdata/raw/main/lav.traineddata && \
+	wget -q -O /app/tessdata/eng.traineddata https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata && \
+	wget -q -O /app/tessdata/rus.traineddata https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata
+ENV CREATIO_MCP_OCR_LANG_PATH=/app/tessdata
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

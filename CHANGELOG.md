@@ -8,6 +8,21 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ### Added
 
+- **`read-file` server-side TEXT extraction (new default)** — `format:"text"` extracts readable
+  content on the server instead of returning base64: `.docx` (paragraphs/tables/footnotes, Word
+  field plumbing stripped), `.xlsx` → CSV per sheet, `.pdf` text layer with **automatic OCR for
+  scanned PDFs** (tesseract.js + pdf.js rendering; `lav+eng+rus` default, first 10 pages,
+  `CREATIO_MCP_OCR_*` env knobs, Docker image bundles offline traineddata), `.edoc`/`.asice`
+  ASiC-E signed containers (payload unwrapped, nested containers recursed, images listed as
+  skipped), `.rtf` (real tokenizer with `\u`/`\'hh` escapes and the cp1257 Baltic codepage),
+  legacy `.doc` (`word-extractor`), Outlook `.msg` (`@kenjiuno/msgreader`), and plain text.
+  Rationale: base64 of a typical `.docx` tokenizes ~17x larger than its text and is undecodable
+  by chat-only MCP clients. Extracted text is capped by `maxChars` (default 150,000;
+  `extraction.truncated` flag), formats with no text path fail with
+  `creatio_file_text_unsupported` pointing at `format:"base64"`, and the containers are parsed by
+  a dependency-free ZIP reader (`zlib` only). `format:"base64"` keeps the previous behavior
+  byte-for-byte.
+
 - **`read-file` tool — download file attachment content** — a new read-only core tool that fetches
   the binary content of Creatio file attachments (`ActivityFile`, `AccountFile`, custom
   `<Section>File` entities) via the OData file API (`GET /0/odata/<Entity>(<id>)/Data`) and returns

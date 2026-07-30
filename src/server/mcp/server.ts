@@ -386,17 +386,21 @@ export class Server {
 				name: 'read-file',
 				descriptor: readFileDescriptor,
 				input: readFileInput,
-				run: async ({ entity, id, maxBytes }) => {
+				run: async ({ entity, id, maxBytes, format, maxChars, ocr }) => {
 					const result = await file.download({
 						entity,
 						id,
 						...(maxBytes !== undefined ? { maxBytes } : {}),
+						...(format !== undefined ? { format } : {}),
+						...(maxChars !== undefined ? { maxChars } : {}),
+						...(ocr !== undefined ? { ocr } : {}),
 					});
-					// Pre-wrap the MCP envelope so the base64 payload bypasses redactSecrets:
-					// on a multi-megabyte base64 stream the scrubber's `pwd=`/`secret=` value
-					// patterns statistically WILL match by chance and would silently corrupt
-					// the file. The payload is machine-generated metadata + base64 — it cannot
-					// carry a header-shaped credential by construction.
+					// Pre-wrap the MCP envelope so the payload bypasses redactSecrets. For
+					// base64 the scrubber's `pwd=`/`secret=` value patterns statistically
+					// WILL match inside a multi-megabyte stream and silently corrupt the
+					// file; for extracted text the same patterns would mangle legitimate
+					// document content (an IT instruction quoting "password=" syntax).
+					// Document content is the user's own data, not server credentials.
 					return {
 						content: [{ type: 'text', text: JSON.stringify(result) }],
 					};

@@ -345,7 +345,7 @@ works unchanged on both backends.
 | `list-entities`                  | List all available entity sets                                                                                                                           |
 | `describe-entity`                | Get schema for an entity (fields, types, keys). Routes through DataForge for richer column details when it is enabled, otherwise exact OData `$metadata` |
 | `read`                           | Query records: filters, select, expand, ordering, pagination (skip/top) and total count                                                                  |
-| `read-file`                      | Download the binary content of a file attachment (base64) via the OData file API — e.g. documents on `ActivityFile` / `AccountFile`                      |
+| `read-file`                      | Read a file attachment's TEXT (docx, xlsx→CSV, pdf incl. scanned-PDF OCR, edoc, rtf, doc, msg) or raw base64 — e.g. documents on `ActivityFile`          |
 | `create`                         | Create a new record                                                                                                                                      |
 | `update`                         | Update an existing record                                                                                                                                |
 | `delete`                         | Delete a record                                                                                                                                          |
@@ -374,11 +374,27 @@ Ask for exactly the data you need — the AI doesn't have to know OData:
 ### Reading file attachments with `read-file`
 
 Attachments live in `<Section>File` entities (`ActivityFile`, `AccountFile`, `ContactFile`, custom
-ones). `read` returns their **metadata** (name, size); `read-file` returns the **bytes**:
+ones). `read` returns their **metadata** (name, size); `read-file` returns the **content**:
 
 1. `read` on the file entity, selecting `["Id","Name","Size"]`, to locate the attachment.
-2. `read-file` with that entity + `Id` → `{ fileName, contentType, sizeBytes, base64 }`.
-3. Decode the base64 to reconstruct the file.
+2. `read-file` with that entity + `Id` → by default (`format:"text"`) the server extracts and
+   returns readable text: `{ fileName, contentType, sizeBytes, text, extraction }`.
+3. `format:"base64"` returns the raw bytes instead, for callers that need the original file.
+
+**Text extraction covers:** `.docx` (paragraphs, tables, footnotes), `.xlsx` (CSV per sheet),
+`.pdf` (text layer; image-only scans are **OCRed automatically** — Latvian/English/Russian by
+default), `.edoc`/`.asice` signed containers (payload unwrapped, nested containers followed),
+`.rtf` (incl. the cp1257 Baltic codepage), legacy `.doc`, Outlook `.msg`, and plain text. Images
+have no text path and report `creatio_file_text_unsupported`. Extracted text is capped at
+`maxChars` (default 150,000) with an `extraction.truncated` flag. Why text is the default: base64
+of a typical `.docx` tokenizes ~17x larger than its text, and a chat-only MCP client cannot decode
+binary at all.
+
+**OCR knobs** (scanned PDFs): `CREATIO_MCP_OCR_LANGS` (default `lav+eng+rus`),
+`CREATIO_MCP_OCR_LANG_PATH` (local traineddata dir for offline deployments — the Docker image
+bundles it), `CREATIO_MCP_OCR_DISABLE=true` to turn OCR off. OCR needs the optional dependencies
+(`tesseract.js`, `@napi-rs/canvas`); without them scanned PDFs report `ocr_unavailable`. OCR reads
+the first 10 pages (`extraction.ocrPagesLimited` marks when it stopped early).
 
 Downloads above `maxBytes` (default 10 MB = 10,000,000 bytes; hard cap 50 MB = 50,000,000, enforced
 in the provider too) are refused with `creatio_file_too_large` — up front via `Content-Length` when

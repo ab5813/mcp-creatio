@@ -1,6 +1,7 @@
 import { FileDownloadRequest, FileDownloadResult, FileProvider } from '../contracts';
 
 import { assertEntityName } from './entity-name';
+import { UnsupportedFormatError, extractTextFromBytes } from './file-extraction';
 import { CreatioHttpClient } from './http-client';
 import { GUID_RE } from './identifiers';
 import { odataRoot } from './odata/odata-routes';
@@ -18,6 +19,10 @@ export const DEFAULT_MAX_FILE_BYTES = 10_000_000;
  * not only in the tool input schema — also covers direct engine callers.
  */
 export const MAX_FILE_DOWNLOAD_BYTES = 50_000_000;
+
+/** Default cap on extracted text (~37k tokens) — enough for any policy document,
+ *  small enough that a mega-spreadsheet cannot flood the model's context. */
+export const DEFAULT_MAX_TEXT_CHARS = 150_000;
 
 /** RFC 5987 extended form: `filename*=UTF-8''<pct-encoded>`. Authoritative when present. */
 const EXTENDED_FILENAME_RE = /filename\*=UTF-8''([^;]+)/i;
@@ -112,6 +117,41 @@ export class FileServiceProvider implements FileProvider {
 		return Buffer.concat(chunks);
 	}
 
+	/** Server-side text extraction: the 17x-cheaper default (base64 of a typical
+	 *  .docx tokenizes ~17x larger than its text, and a chat-only MCP client has
+	 *  no way to decode binary at all). */
+	private async _extractText(
+		bytes: Buffer,
+		request: FileDownloadRequest,
+		fileName: string | undefined,
+	): Promise<Pick<FileDownloadResult, 'text' | 'extraction'>> {
+		try {
+			const extracted = await extractTextFromBytes(bytes, {
+				...(fileName !== undefined ? { fileName } : {}),
+				...(request.ocr !== undefined ? { ocr: request.ocr } : {}),
+			});
+			const maxChars = request.maxChars ?? DEFAULT_MAX_TEXT_CHARS;
+			const truncated = extracted.text.length > maxChars;
+			return {
+				text: truncated ? extracted.text.slice(0, maxChars) : extracted.text,
+				extraction: {
+					format: extracted.format,
+					...(truncated ? { truncated } : {}),
+					...(extracted.meta ?? {}),
+				},
+			};
+		} catch (err) {
+			if (err instanceof UnsupportedFormatError) {
+				throw new Error(
+					`creatio_file_text_unsupported:${err.message} — retry with format:"base64" if you need the raw bytes`,
+				);
+			}
+			throw new Error(
+				`creatio_file_text_extraction_failed:${String((err as Error)?.message ?? err)}`,
+			);
+		}
+	}
+
 	public async download(request: FileDownloadRequest): Promise<FileDownloadResult> {
 		const { entity, id } = request;
 		// Clamp to the hard ceiling here (not only in the tool schema) so a direct engine
@@ -157,14 +197,17 @@ export class FileServiceProvider implements FileProvider {
 				});
 				const contentType = response.headers.get('content-type') ?? undefined;
 				const fileName = this._parseFileName(response);
-				return {
+				const base = {
 					entity,
 					id,
 					sizeBytes: bytes.byteLength,
-					base64: bytes.toString('base64'),
 					...(contentType !== undefined ? { contentType } : {}),
 					...(fileName !== undefined ? { fileName } : {}),
 				};
+				if ((request.format ?? 'text') === 'base64') {
+					return { ...base, base64: bytes.toString('base64') };
+				}
+				return { ...base, ...(await this._extractText(bytes, request, fileName)) };
 			},
 			{ errorPrefix: 'creatio_download_file_failed', logContext: { entity, id } },
 		);

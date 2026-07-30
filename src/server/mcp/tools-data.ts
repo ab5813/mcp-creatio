@@ -488,20 +488,43 @@ const readFileInputShape = {
 		.describe(
 			'Optional size guard in bytes (default 10000000 = 10 MB, hard cap 50000000 = 50 MB). A larger file is refused with "creatio_file_too_large" instead of flooding the transport — check Size via "read" first and raise this only when you really need the bigger file.',
 		),
+	format: z
+		.enum(['text', 'base64'])
+		.optional()
+		.describe(
+			'"text" (DEFAULT — almost always what you want): the server extracts readable text from the file. "base64": raw file bytes — only for saving/re-uploading the original; NEVER re-emit base64 yourself, it is far too large.',
+		),
+	maxChars: z.coerce
+		.number()
+		.int()
+		.positive()
+		.max(2_000_000)
+		.optional()
+		.describe(
+			'Truncate extracted text beyond this many characters (default 150000). The result sets extraction.truncated=true when cut.',
+		),
+	ocr: z
+		.boolean()
+		.optional()
+		.describe(
+			'OCR scanned (image-only) PDFs — default true. Set false to skip the OCR cost when you only care about digital text layers. OCR covers the first 10 pages and reads Latvian/English/Russian.',
+		),
 } as const;
 export const readFileInput = z.object(readFileInputShape);
 
 export const readFileDescriptor = makeToolDescriptor({
 	title: 'Read file attachment content from Creatio',
 	description:
-		'Download the BINARY CONTENT of a file attached to a Creatio record (documents, images, .docx/.pdf/.xlsx, etc.) as base64.\n\n' +
+		'Read a file attached to a Creatio record and return its TEXT (default) or raw base64.\n\n' +
+		'Supported for text extraction: .docx, .xlsx (as CSV per sheet), .pdf (text layer; scanned PDFs are OCRed automatically in lav/eng/rus), .edoc/.asice signed containers (payload extracted, nesting followed), .rtf, legacy .doc, Outlook .msg, plain text. Images (.png/.jpg) have no text path.\n\n' +
 		'WORKFLOW:\n' +
 		'1. Use "read" on the file entity (e.g. ActivityFile, AccountFile, or a custom "<Section>File") selecting ["Id","Name","Size"] to locate the attachment and check its size.\n' +
-		'2. Call this tool with that entity name and record Id.\n' +
-		'3. Decode the returned base64 to reconstruct the original file.\n\n' +
-		'Returns JSON: {"entity","id","fileName"?,"contentType"?,"sizeBytes","base64"} — "base64" holds the file bytes.\n\n' +
+		'2. Call this tool with that entity name and record Id — the default format:"text" returns readable content directly; no decoding needed.\n\n' +
+		'Returns JSON: {"entity","id","fileName"?,"contentType"?,"sizeBytes","text","extraction":{"format","truncated"?,"pages"?,"ocr"?,"sheets"?,"parts"?}} for text; {"...","base64"} for base64.\n\n' +
 		'NOTES:\n' +
+		'- If text extraction is unsupported for the content, the error says so ("creatio_file_text_unsupported") — only then consider format:"base64".\n' +
 		'- Files larger than maxBytes (default 10 MB, hard cap 50 MB) are refused with "creatio_file_too_large"; check Size first via "read".\n' +
+		'- Scanned-PDF OCR takes a few seconds per page and covers the first 10 pages (extraction.ocrPagesLimited tells you when it stopped early).\n' +
 		'- Uses the Creatio OData file API (GET /0/odata/<Entity>(<id>)/Data), so it works regardless of the configured CRUD backend.\n' +
 		'- Read-only: available in readonly mode.',
 	inputShape: readFileInputShape,

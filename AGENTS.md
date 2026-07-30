@@ -99,8 +99,9 @@ CreatioServiceContext
   ├─ FeatureServiceProvider → /rest/FeatureService/ClearFeaturesCacheForAllUsers
   ├─ AdminOperationServiceProvider → /rest/RightsService/{Upsert,Delete}AdminOperation[,Grantee]
   ├─ ConfigurationServiceProvider → generic /rest/<service>/<method> caller
-  ├─ FileServiceProvider → binary attachment download via OData /0/odata/<Entity>(<id>)/Data
-  │     (streaming maxBytes guard, base64 result; backend-independent — needs only the base URL)
+  ├─ FileServiceProvider → attachment download via OData /0/odata/<Entity>(<id>)/Data
+  │     (streaming maxBytes guard; default format:"text" extracts docx/xlsx/pdf+OCR/edoc/rtf/
+  │     doc/msg server-side via services/file-extraction/*; format:"base64" returns raw bytes)
   └─ UserInfoProvider → UserInfoService for current user data
 ```
 

@@ -145,6 +145,24 @@ describe('Server tool handlers (read path)', () => {
 		});
 	});
 
+	it('read-file forwards format, maxChars and ocr to the provider', async () => {
+		const { handlers, context } = buildServer();
+		await callTool(handlers, 'read-file', {
+			entity: 'ActivityFile',
+			id: GUID,
+			format: 'base64',
+			maxChars: 5000,
+			ocr: false,
+		});
+		expect(context.file.download).toHaveBeenCalledWith({
+			entity: 'ActivityFile',
+			id: GUID,
+			format: 'base64',
+			maxChars: 5000,
+			ocr: false,
+		});
+	});
+
 	it('read-file enforces the 50 MB hard cap at the schema boundary', async () => {
 		const { handlers, context } = buildServer();
 		// Above the cap: rejected by zod before the provider is ever called.
