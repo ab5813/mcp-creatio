@@ -124,10 +124,12 @@ export class FileServiceProvider implements FileProvider {
 		bytes: Buffer,
 		request: FileDownloadRequest,
 		fileName: string | undefined,
+		contentType: string | undefined,
 	): Promise<Pick<FileDownloadResult, 'text' | 'extraction'>> {
 		try {
 			const extracted = await extractTextFromBytes(bytes, {
 				...(fileName !== undefined ? { fileName } : {}),
+				...(contentType !== undefined ? { contentType } : {}),
 				...(request.ocr !== undefined ? { ocr: request.ocr } : {}),
 			});
 			const maxChars = request.maxChars ?? DEFAULT_MAX_TEXT_CHARS;
@@ -207,7 +209,10 @@ export class FileServiceProvider implements FileProvider {
 				if ((request.format ?? 'text') === 'base64') {
 					return { ...base, base64: bytes.toString('base64') };
 				}
-				return { ...base, ...(await this._extractText(bytes, request, fileName)) };
+				return {
+					...base,
+					...(await this._extractText(bytes, request, fileName, contentType)),
+				};
 			},
 			{ errorPrefix: 'creatio_download_file_failed', logContext: { entity, id } },
 		);

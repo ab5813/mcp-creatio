@@ -54,18 +54,7 @@ export async function extractTextFromBytes(
 
 	// --- CFBF (legacy .doc / Outlook .msg share the container) ---
 	if (bytes.length > 8 && bytes.readUInt32BE(0) === 0xd0cf11e0) {
-		if (name.endsWith('.msg')) {
-			return extractMsg(bytes);
-		}
-		if (name.endsWith('.doc') || name.endsWith('.dot')) {
-			return extractDoc(bytes);
-		}
-		// Unlabeled CFBF: try mail first (cheap structural probe), then Word.
-		try {
-			return await extractMsg(bytes);
-		} catch {
-			return extractDoc(bytes);
-		}
+		return extractCfbf(bytes, name, opts.contentType);
 	}
 
 	// --- plain text-ish payloads (txt/csv/xml/html) ---
@@ -77,6 +66,56 @@ export async function extractTextFromBytes(
 		name.split('.').pop() || 'unknown',
 		'— no text extractor for this content; use format:"base64" if you need the raw file',
 	);
+}
+
+/**
+ * Legacy Word and Outlook mail share the CFBF container, and Creatio's file
+ * endpoint sends NO `Content-Disposition` filename — so the extension is
+ * usually unavailable and the choice must come from the container itself.
+ * CFBF directory-entry names are UTF-16LE, so the defining streams can be
+ * found by a raw scan: `WordDocument` for Word, `__substg1.0_` (property
+ * storage) for mail.
+ *
+ * A wrong guess is not merely mislabeled: `msgreader` returns EMPTY text for a
+ * Word file rather than throwing, which is why a try/catch is not enough — the
+ * chosen extractor's output is checked and the alternative tried if it is bare.
+ */
+export function detectCfbfKind(bytes: Buffer, fileName = '', contentType = ''): 'doc' | 'msg' {
+	const hasWordStream = bytes.includes(Buffer.from('WordDocument', 'utf16le'));
+	const hasMsgStream = bytes.includes(Buffer.from('__substg1.0_', 'utf16le'));
+	if (hasWordStream !== hasMsgStream) {
+		return hasWordStream ? 'doc' : 'msg'; // structural signal — the authority
+	}
+	const name = fileName.toLowerCase();
+	const ct = contentType.toLowerCase();
+	if (name.endsWith('.msg') || ct.includes('outlook')) {
+		return 'msg';
+	}
+	if (name.endsWith('.doc') || name.endsWith('.dot') || ct.includes('msword')) {
+		return 'doc';
+	}
+	return 'msg'; // ambiguous: mail is the cheaper probe
+}
+
+async function extractCfbf(
+	bytes: Buffer,
+	name: string,
+	contentType: string | undefined,
+): Promise<ExtractedText> {
+	const preferMsg = detectCfbfKind(bytes, name, contentType ?? '') === 'msg';
+	const primary = preferMsg ? extractMsg : extractDoc;
+	const fallback = preferMsg ? extractDoc : extractMsg;
+	try {
+		const result = await primary(bytes);
+		if (result.text.trim().length > 0) {
+			return result;
+		}
+		// Empty is the silent-misdetection signature — try the other extractor.
+		const alt = await fallback(bytes);
+		return alt.text.trim().length > 0 ? alt : result;
+	} catch {
+		return fallback(bytes);
+	}
 }
 
 async function extractContainer(

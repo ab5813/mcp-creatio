@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	detectCfbfKind,
 	extractTextFromBytes,
 	UnsupportedFormatError,
 	ZipReader,
@@ -87,6 +88,28 @@ describe('extractTextFromBytes dispatch', () => {
 		await expect(extractTextFromBytes(bytes, { fileName: 'img.png' })).rejects.toThrow(
 			UnsupportedFormatError,
 		);
+	});
+});
+
+describe('detectCfbfKind', () => {
+	// Creatio's file endpoint sends NO Content-Disposition filename, so legacy
+	// Word and Outlook mail — which share the CFBF container — must be told
+	// apart from the container itself. Directory-entry names are UTF-16LE.
+	const wordStream = Buffer.from('WordDocument', 'utf16le');
+	const msgStream = Buffer.from('__substg1.0_', 'utf16le');
+
+	it('prefers the structural stream over a misleading name or MIME type', () => {
+		expect(detectCfbfKind(wordStream, 'note.msg', 'application/vnd.ms-outlook')).toBe('doc');
+		expect(detectCfbfKind(msgStream, 'letter.doc', 'application/msword')).toBe('msg');
+	});
+
+	it('falls back to name/MIME hints when no stream is recognizable', () => {
+		const blank = Buffer.alloc(64);
+		expect(detectCfbfKind(blank, 'letter.doc')).toBe('doc');
+		expect(detectCfbfKind(blank, '', 'application/msword')).toBe('doc');
+		expect(detectCfbfKind(blank, 'note.msg')).toBe('msg');
+		// No signal at all (the real Creatio case): mail is the cheaper probe.
+		expect(detectCfbfKind(blank)).toBe('msg');
 	});
 });
 
