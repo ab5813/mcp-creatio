@@ -8,6 +8,13 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ### Added
 
+- **`CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS` — broker OAuth for web clients** — dynamic client
+  registration previously accepted only loopback / app-scheme redirect URIs (native apps), so a
+  web client like Open WebUI failed with "Registration failed" (its callback is its own https
+  origin). Deployments can now allowlist specific https origins (comma-separated, compared by
+  origin, https-only); loopback and app schemes remain always allowed, everything else stays
+  rejected.
+
 - **`read-file` server-side TEXT extraction (new default)** — `format:"text"` extracts readable
   content on the server instead of returning base64: `.docx` (paragraphs/tables/footnotes, Word
   field plumbing stripped), `.xlsx` → CSV per sheet, `.pdf` text layer with **automatic OCR for

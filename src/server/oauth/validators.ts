@@ -7,11 +7,41 @@ import type {
 const DANGEROUS_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:']);
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
+/**
+ * Web clients (Open WebUI, LibreChat, …) redirect to their own https origin,
+ * which the loopback-only default rejects. Deployments opt such origins in via
+ * CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS (comma-separated, e.g.
+ * "https://open-webui.example.com"). Only the origin is compared — any path on
+ * an allowed origin is fine; https-only, so a MITM'able callback can't be
+ * allowlisted by accident. Read per call: registration is rare and tests (or a
+ * config reload) may change the env between calls.
+ */
+function allowedRedirectOrigins(): Set<string> {
+	const raw = process.env['CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS'] ?? '';
+	const origins = new Set<string>();
+	for (const entry of raw.split(',')) {
+		const trimmed = entry.trim();
+		if (!trimmed) {
+			continue;
+		}
+		try {
+			const parsed = new URL(trimmed);
+			if (parsed.protocol === 'https:') {
+				origins.add(parsed.origin);
+			}
+		} catch {
+			// A malformed allowlist entry must never widen (or crash) validation.
+		}
+	}
+	return origins;
+}
+
 export class OAuthValidators {
 	/**
 	 * Restricts OAuth redirect targets to loopback web addresses (native-app local
-	 * listeners) and custom app-scheme deep links, blocking redirects to arbitrary
-	 * remote origins and script-bearing schemes (open redirect / code interception, CWE-601).
+	 * listeners), custom app-scheme deep links, and explicitly allowlisted https
+	 * origins (web clients), blocking redirects to arbitrary remote origins and
+	 * script-bearing schemes (open redirect / code interception, CWE-601).
 	 */
 	public static isAllowedRedirectUri(uri: string): boolean {
 		let parsed: URL;
@@ -25,7 +55,10 @@ export class OAuthValidators {
 			return false;
 		}
 		if (proto === 'http:' || proto === 'https:') {
-			return LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase());
+			return (
+				LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase()) ||
+				(proto === 'https:' && allowedRedirectOrigins().has(parsed.origin))
+			);
 		}
 		// Any other custom scheme (e.g. vscode:, cursor:, com.example.app:) is an app deep link.
 		return true;
@@ -86,7 +119,7 @@ export class OAuthValidators {
 				return `Invalid redirect_uri: ${uri}`;
 			}
 			if (!OAuthValidators.isAllowedRedirectUri(uri)) {
-				return `Disallowed redirect_uri (must be loopback or an app scheme): ${uri}`;
+				return `Disallowed redirect_uri (must be loopback, an app scheme, or an https origin listed in CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS): ${uri}`;
 			}
 		}
 		return null;

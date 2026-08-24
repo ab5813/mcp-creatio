@@ -167,6 +167,12 @@ issued refresh tokens. It always answers `200` (no token-validity oracle).
 Register the Creatio app in System Designer → _OAuth 2.0 applications_ → _On behalf of a user_, and
 add the MCP callback (`http://localhost:3000/oauth/callback` for a local run) to its redirect URIs.
 
+> **Web clients (Open WebUI, LibreChat, …).** Dynamic client registration accepts loopback and
+> app-scheme redirect URIs out of the box (native apps). A web client redirects to its own https
+> origin, which is rejected unless you allowlist it:
+> `CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS=https://open-webui.example.com` (comma-separated; https
+> only, compared by origin).
+
 ### `delegated` (default when nothing else is set)
 
 Pure resource server: each `/mcp` request must carry a Creatio access token; the MCP advertises the
@@ -288,15 +294,16 @@ nothing works without it; the rest depend on the auth method and the features yo
 
 ### Authentication (pick one method — see [Authentication](#authentication))
 
-| Variable                             | Mode          | Description                                                                                                                                                                |
-| ------------------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CREATIO_MCP_AUTH_MODE`              | any           | `broker` \| `delegated` \| `gateway` \| `client_credentials` \| `legacy`. Unset ⇒ inferred (legacy → client_credentials → delegated)                                       |
-| `CREATIO_CLIENT_ID`                  | broker / M2M  | Creatio OAuth app client id (the brokered app, or the M2M account)                                                                                                         |
-| `CREATIO_CLIENT_SECRET`              | broker? / M2M | Required for client_credentials; optional for a confidential broker app (omit for public/PKCE)                                                                             |
-| `CREATIO_MCP_JWT_SECRET`             | broker        | Secret signing the tokens the MCP issues to clients. **Min 32 chars; required in production.** Random if unset outside prod (set a stable value for prod / multi-instance) |
-| `CREATIO_MCP_ALLOWED_BASE_URLS`      | gateway       | _Optional_ — comma-separated allowlist of Creatio origins the `X-Creatio-Base-Url` override may target (SSRF guard). Unset ⇒ any http(s) host except cloud-metadata        |
-| `CREATIO_LOGIN` / `CREATIO_PASSWORD` | legacy        | Username / password                                                                                                                                                        |
-| `CREATIO_ID_BASE_URL`                | any           | _Optional_ — Identity Service URL; defaults to deriving from `CREATIO_BASE_URL`                                                                                            |
+| Variable                               | Mode          | Description                                                                                                                                                                                                                                                             |
+| -------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CREATIO_MCP_AUTH_MODE`                | any           | `broker` \| `delegated` \| `gateway` \| `client_credentials` \| `legacy`. Unset ⇒ inferred (legacy → client_credentials → delegated)                                                                                                                                    |
+| `CREATIO_CLIENT_ID`                    | broker / M2M  | Creatio OAuth app client id (the brokered app, or the M2M account)                                                                                                                                                                                                      |
+| `CREATIO_CLIENT_SECRET`                | broker? / M2M | Required for client_credentials; optional for a confidential broker app (omit for public/PKCE)                                                                                                                                                                          |
+| `CREATIO_MCP_JWT_SECRET`               | broker        | Secret signing the tokens the MCP issues to clients. **Min 32 chars; required in production.** Random if unset outside prod (set a stable value for prod / multi-instance)                                                                                              |
+| `CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS` | broker        | _Optional_ — comma-separated **https origins** web clients (Open WebUI, LibreChat) may use as OAuth redirect targets (e.g. `https://open-webui.example.com`). Loopback and app-scheme redirects are always allowed; other https origins are rejected unless listed here |
+| `CREATIO_MCP_ALLOWED_BASE_URLS`        | gateway       | _Optional_ — comma-separated allowlist of Creatio origins the `X-Creatio-Base-Url` override may target (SSRF guard). Unset ⇒ any http(s) host except cloud-metadata                                                                                                     |
+| `CREATIO_LOGIN` / `CREATIO_PASSWORD`   | legacy        | Username / password                                                                                                                                                                                                                                                     |
+| `CREATIO_ID_BASE_URL`                  | any           | _Optional_ — Identity Service URL; defaults to deriving from `CREATIO_BASE_URL`                                                                                                                                                                                         |
 
 ### Data & behavior (optional)
 

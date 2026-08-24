@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OAuthValidators } from '../../src/server/oauth/validators';
 
@@ -47,6 +47,42 @@ describe('OAuthValidators.isAllowedRedirectUri', () => {
 	});
 });
 
+describe('OAuthValidators.isAllowedRedirectUri — allowlisted web origins', () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	it('allows an https redirect whose origin is in CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS', () => {
+		vi.stubEnv(
+			'CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS',
+			'https://open-webui.example.com, https://chat.example.org',
+		);
+		expect(
+			OAuthValidators.isAllowedRedirectUri('https://open-webui.example.com/oauth/cb'),
+		).toBe(true);
+		expect(OAuthValidators.isAllowedRedirectUri('https://chat.example.org/x/y?z=1')).toBe(true);
+	});
+
+	it('still rejects https origins that are NOT allowlisted', () => {
+		vi.stubEnv('CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS', 'https://open-webui.example.com');
+		expect(OAuthValidators.isAllowedRedirectUri('https://evil.example.com/cb')).toBe(false);
+		// Same host, different port = different origin.
+		expect(OAuthValidators.isAllowedRedirectUri('https://open-webui.example.com:8443/cb')).toBe(
+			false,
+		);
+	});
+
+	it('never allowlists plain-http origins (web callbacks must be TLS)', () => {
+		vi.stubEnv('CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS', 'http://open-webui.example.com');
+		expect(OAuthValidators.isAllowedRedirectUri('http://open-webui.example.com/cb')).toBe(
+			false,
+		);
+	});
+
+	it('ignores malformed allowlist entries instead of widening or crashing', () => {
+		vi.stubEnv('CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS', 'not a url,,https://good.example.com');
+		expect(OAuthValidators.isAllowedRedirectUri('https://good.example.com/cb')).toBe(true);
+		expect(OAuthValidators.isAllowedRedirectUri('https://not-a-url/cb')).toBe(false);
+	});
+});
 describe('OAuthValidators.validateAuthorizationRequest', () => {
 	const base: OAuthAuthorizationRequest = {
 		client_id: 'c1',
