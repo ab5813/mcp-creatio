@@ -11,6 +11,7 @@ import {
 } from './server';
 import { SessionContext, TokenStore, createTokenStore } from './sessions';
 import { envBool } from './utils';
+import { NAME, VERSION } from './version';
 
 let _httpInstance: HttpServer | undefined;
 let _keepAlive: SessionKeepAlive | undefined;
@@ -28,6 +29,17 @@ async function main() {
 	// Auth mode is resolved in config-builder: explicit CREATIO_MCP_AUTH_MODE, else inferred
 	// (legacy/client_credentials from creds, otherwise delegated for this multi-user HTTP server).
 	const cfg = getCreatioClientConfig();
+	// Startup banner: makes the RUNNING build + config unmistakable in `docker logs` the moment
+	// the container starts — so "did my rebuild/redeploy actually take?" is answerable without
+	// probing behavior. The version doubles as the deployment fingerprint (also on GET /healthz).
+	log.info('app.banner', {
+		name: NAME,
+		version: VERSION,
+		authMode: cfg.auth.kind,
+		readonly: envBool('CREATIO_MCP_READONLY', false),
+		crudBackend: cfg.crudBackend,
+		allowedRedirectOrigins: process.env['CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS'] || '(none)',
+	});
 	// Broker holds users' Creatio tokens server-side; a Redis store makes that stateless +
 	// restart-durable + multi-instance (default stays in-memory). Only broker mode needs it.
 	if (cfg.auth.kind === AuthProviderType.Broker) {
