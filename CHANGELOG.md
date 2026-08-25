@@ -6,6 +6,14 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-24
+
+File text extraction for `read-file`, plus broker OAuth support for web clients. Version bumped
+from 0.6.7 so the running build is identifiable via `serverInfo.version` (the whole 0.6.x series
+reported 0.6.7, making deployed builds indistinguishable). Live-verified against a real Creatio
+instance over OAuth: per-user permissions enforced, document text extraction (docx/xlsx/pdf+OCR/
+edoc/rtf/doc/msg) working end-to-end.
+
 ### Added
 
 - **`CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS` — broker OAuth for web clients** — dynamic client
