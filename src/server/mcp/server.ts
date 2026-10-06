@@ -72,6 +72,19 @@ import {
  *  is always respected; paginate further with `skip`. */
 const DEFAULT_READ_TOP = 50;
 
+/** With an entity allowlist, only the tools the policy can police are exposed: everything else
+ *  (processes, sys settings, configuration service, user info, …) reaches beyond the allowed
+ *  objects. Mutations stay subject to `CREATIO_MCP_READONLY` as usual. */
+const ENTITY_RESTRICTED_TOOLS = new Set([
+	'list-entities',
+	'describe-entity',
+	'read',
+	'read-file',
+	'create',
+	'update',
+	'delete',
+]);
+
 export interface ServerConfig {
 	readonlyMode?: boolean;
 	/** Skip the DataForge capability probe AND its tools entirely — even where DataForge is
@@ -120,6 +133,10 @@ export class Server {
 	private _serverName = NAME;
 	private _serverVersion = VERSION;
 
+	private get _entityRestricted(): boolean {
+		return this._engines.entityAccess?.restricted ?? false;
+	}
+
 	public get authProvider(): ICreatioAuthProvider {
 		return this._engines.authProvider;
 	}
@@ -138,12 +155,15 @@ export class Server {
 			envBool('CREATIO_MCP_ENABLE_PUBLISHED_TOOLS', false),
 		);
 		// A disabled capability is simply never added to the preparer list, so it is neither
-		// probed (no network / no token spend) nor registered as a tool.
-		this._preparers = [
+		// probed (no network / no token spend) nor registered as a tool. An entity allowlist
+		// disables them all: Global Search and published tools span every object, and DataForge
+		// would describe entities outside the policy.
+		const preparers = [
 			...(config.disableDataForge ? [] : [this._dataForgePreparer]),
 			...(config.disableGlobalSearch ? [] : [this._globalSearchPreparer]),
 			this._publishedToolsPreparer,
 		];
+		this._preparers = this._entityRestricted ? [] : preparers;
 		this._registerClientTools();
 	}
 
@@ -522,7 +542,10 @@ export class Server {
 
 	private _registerClientTools() {
 		const { core, mutating } = this._clientToolDefs();
-		const defs = this._readonly ? core : [...core, ...mutating];
+		let defs = this._readonly ? core : [...core, ...mutating];
+		if (this._entityRestricted) {
+			defs = defs.filter((def) => ENTITY_RESTRICTED_TOOLS.has(def.name));
+		}
 		for (const def of defs) {
 			this._registerStaticTool(def.name, def.descriptor, withValidation(def.input, def.run));
 		}

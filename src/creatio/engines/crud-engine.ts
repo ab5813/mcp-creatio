@@ -30,33 +30,38 @@ export class CrudEngine extends BaseEngine {
 		this._provider = provider;
 	}
 
-	public listEntitySets(): Promise<string[]> {
-		return this._provider.listEntitySets();
+	public async listEntitySets(): Promise<string[]> {
+		return this._entityAccess.filterEntities(await this._provider.listEntitySets());
 	}
 
-	public describeEntity(entitySet: string): Promise<EntitySchemaDescription> {
+	public async describeEntity(entitySet: string): Promise<EntitySchemaDescription> {
+		this._entityAccess.assertEntity(entitySet);
 		return this._provider.describeEntity(entitySet);
 	}
 
-	public read(query: ReadQuery): Promise<ReadResult> {
+	public async read(query: ReadQuery): Promise<ReadResult> {
+		this._entityAccess.assertRead(query);
 		return this._provider.read(query);
 	}
 
 	public create(params: CrudWriteParams): Promise<any> {
-		return this._mutate('crud.create', { entity: params.entity }, () =>
-			this._provider.create(params),
-		);
+		return this._mutate('crud.create', { entity: params.entity }, async () => {
+			this._entityAccess.assertEntity(params.entity);
+			return this._provider.create(params);
+		});
 	}
 
 	public update(params: CrudUpdateParams): Promise<any> {
-		return this._mutate('crud.update', { entity: params.entity, id: params.id }, () =>
-			this._provider.update(params),
-		);
+		return this._mutate('crud.update', { entity: params.entity, id: params.id }, async () => {
+			this._entityAccess.assertEntity(params.entity);
+			return this._provider.update(params);
+		});
 	}
 
 	public delete(params: CrudDeleteParams): Promise<any> {
-		return this._mutate('crud.delete', { entity: params.entity, id: params.id }, () =>
-			this._provider.delete(params),
-		);
+		return this._mutate('crud.delete', { entity: params.entity, id: params.id }, async () => {
+			this._entityAccess.assertEntity(params.entity);
+			return this._provider.delete(params);
+		});
 	}
 }

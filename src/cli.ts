@@ -3,7 +3,12 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { getCreatioClientConfig } from './config-builder';
-import { AuthProviderType, CreatioEngineManager, CreatioServiceContext } from './creatio';
+import {
+	AuthProviderType,
+	CreatioEngineManager,
+	CreatioServiceContext,
+	EntityAccessPolicy,
+} from './creatio';
 import log from './log';
 import { Server, SessionKeepAlive, installHttpAgent, keepAliveIntervalMs } from './server';
 import { envBool } from './utils';
@@ -147,7 +152,10 @@ async function main(): Promise<void> {
 
 	const provider = new CreatioServiceContext(cfg);
 	const readonlyMode = envBool('CREATIO_MCP_READONLY', false);
-	const engines = new CreatioEngineManager(provider, { readonly: readonlyMode });
+	const engines = new CreatioEngineManager(provider, {
+		readonly: readonlyMode,
+		entityAccess: EntityAccessPolicy.fromList(process.env['CREATIO_MCP_ALLOWED_ENTITIES']),
+	});
 	const server = new Server(engines, {
 		readonlyMode,
 		disableDataForge: envBool('CREATIO_MCP_DISABLE_DATAFORGE', false),

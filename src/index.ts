@@ -1,6 +1,11 @@
 import { getCreatioClientConfig, getTokenStoreConfig } from './config-builder';
 import { HTTP_MCP_PORT } from './consts';
-import { AuthProviderType, CreatioEngineManager, CreatioServiceContext } from './creatio';
+import {
+	AuthProviderType,
+	CreatioEngineManager,
+	CreatioServiceContext,
+	EntityAccessPolicy,
+} from './creatio';
 import log from './log';
 import {
 	HttpServer,
@@ -37,6 +42,7 @@ async function main() {
 		version: VERSION,
 		authMode: cfg.auth.kind,
 		readonly: envBool('CREATIO_MCP_READONLY', false),
+		allowedEntities: process.env['CREATIO_MCP_ALLOWED_ENTITIES'] || '(all)',
 		crudBackend: cfg.crudBackend,
 		allowedRedirectOrigins: process.env['CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS'] || '(none)',
 	});
@@ -51,7 +57,10 @@ async function main() {
 	}
 	const provider = new CreatioServiceContext(cfg);
 	const readonlyMode = envBool('CREATIO_MCP_READONLY', false);
-	const engines = new CreatioEngineManager(provider, { readonly: readonlyMode });
+	const engines = new CreatioEngineManager(provider, {
+		readonly: readonlyMode,
+		entityAccess: EntityAccessPolicy.fromList(process.env['CREATIO_MCP_ALLOWED_ENTITIES']),
+	});
 	const server = new Server(engines, {
 		readonlyMode,
 		disableDataForge: envBool('CREATIO_MCP_DISABLE_DATAFORGE', false),

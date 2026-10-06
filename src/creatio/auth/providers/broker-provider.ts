@@ -1,3 +1,4 @@
+import log from '../../../log';
 import { SessionContext, UserTokens } from '../../../sessions';
 import { getEffectiveUserKey } from '../../../utils';
 import { BrokerAuthConfig, CreatioClientConfig } from '../../client-config';
@@ -45,7 +46,19 @@ export class BrokerProvider extends BaseProvider<BrokerAuthConfig> {
 			return existing;
 		}
 		const promise = (async () => {
-			const updated = await this._creatio.refresh(refreshToken);
+			let updated: UserTokens;
+			try {
+				updated = await this._creatio.refresh(refreshToken);
+			} catch (err) {
+				// The refresh token is dead (expired, revoked, or already rotated). Holding on to it
+				// would make every call fail while the client's MCP token stays valid; dropping it
+				// makes the /mcp edge answer 401 invalid_token so the client re-runs the login.
+				// A 5xx / network failure is transient, so the tokens are kept for the next attempt.
+				if (/creatio_oauth_refresh_error:40[01]\b/.test(String((err as Error)?.message))) {
+					await this._session.deleteTokensForUser(userKey);
+				}
+				throw err;
+			}
 			await this._session.setTokensForUser(userKey, updated);
 			return updated;
 		})().finally(() => this._inflightRefresh.delete(userKey));
@@ -59,6 +72,16 @@ export class BrokerProvider extends BaseProvider<BrokerAuthConfig> {
 			throw new Error('broker_no_user');
 		}
 		return buildHeaders(accept, Boolean(isJson), await this._ensureAccessToken(userKey));
+	}
+
+	/** Creatio rejected the user's tokens even right after a refresh: drop them so the next /mcp
+	 *  request gets a 401 challenge and the client re-authorizes. */
+	public async invalidate(): Promise<void> {
+		const userKey = getEffectiveUserKey();
+		if (userKey) {
+			log.warn('broker.creatio.tokens_rejected', { userKey });
+			await this._session.deleteTokensForUser(userKey);
+		}
 	}
 
 	/** Forces a refresh for the current user (called by the HTTP client on a 401, then it retries). */

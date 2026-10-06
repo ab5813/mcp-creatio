@@ -6,6 +6,25 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`CREATIO_MCP_ALLOWED_ENTITIES` — entity allowlist** — comma-separated Creatio objects the
+  deployment may touch (plus their `<Entity>File` attachment objects). Enforced in the CRUD and
+  file engines: `list-entities` is filtered, `describe-entity`/`read`/`read-file`/writes on other
+  objects are refused, and reads may not traverse lookups (`Owner.Name`) — only own columns and
+  `<Lookup>.Id`. Raw OData `$filter`/`$expand` are refused. The tool surface shrinks to the CRUD
+  tools, and DataForge, Global Search and published tools are not probed or registered.
+
+### Fixed
+
+- **401 retry replayed the stale token** — callers that built their headers before
+  `fetchWithAuth` (DataService, sys settings, processes, …) retried a 401 with the pre-refresh
+  credentials, so the refresh never helped. The retry now re-stamps the auth headers.
+- **Broker kept dead Creatio tokens** — when Creatio rejected the refresh token (400/401), or
+  still rejected the token right after a refresh, the broker held on to them, so every call
+  failed with Creatio's 401 page while the client's MCP token stayed valid. They are now
+  dropped, so `/mcp` answers `401 invalid_token` and the client re-authorizes.
+
 ## [0.7.0] — 2026-08-24
 
 File text extraction for `read-file`, plus broker OAuth support for web clients. Version bumped

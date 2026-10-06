@@ -107,3 +107,53 @@ describe('BrokerProvider — serves stored per-user Creatio tokens', () => {
 		await expect(new BrokerProvider(config()).refresh()).resolves.toBeUndefined();
 	});
 });
+
+describe('BrokerProvider — dead Creatio tokens force re-authorization', () => {
+	it('drops the stored tokens when Creatio rejects the refresh token', async () => {
+		resetSessionContext();
+		await SessionContext.instance.setTokensForUser('u1', {
+			accessToken: 'old',
+			accessTokenExpiryMs: Date.now() - 1000,
+			refreshToken: 'RT',
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 400 })),
+		);
+		await expect(
+			runWithContext({ userKey: 'u1' }, () =>
+				new BrokerProvider(config()).getHeaders('application/json', true),
+			),
+		).rejects.toThrow(/creatio_oauth_refresh_error:400/);
+		expect(await SessionContext.instance.getTokensForUser('u1')).toBeNull();
+	});
+
+	it('keeps the stored tokens when the refresh fails transiently', async () => {
+		resetSessionContext();
+		await SessionContext.instance.setTokensForUser('u1', {
+			accessToken: 'old',
+			accessTokenExpiryMs: Date.now() - 1000,
+			refreshToken: 'RT',
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('down', { status: 503 })),
+		);
+		await expect(
+			runWithContext({ userKey: 'u1' }, () =>
+				new BrokerProvider(config()).getHeaders('application/json', true),
+			),
+		).rejects.toThrow(/creatio_oauth_refresh_error:503/);
+		expect(await SessionContext.instance.getTokensForUser('u1')).not.toBeNull();
+	});
+
+	it('invalidate() drops the current user tokens', async () => {
+		resetSessionContext();
+		await SessionContext.instance.setTokensForUser('u1', {
+			accessToken: 'AT',
+			accessTokenExpiryMs: Date.now() + 3_600_000,
+		});
+		await runWithContext({ userKey: 'u1' }, () => new BrokerProvider(config()).invalidate());
+		expect(await SessionContext.instance.getTokensForUser('u1')).toBeNull();
+	});
+});

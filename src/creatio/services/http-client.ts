@@ -10,6 +10,9 @@ type ErrorHandler<T> = (response: Response, duration: number) => Promise<T>;
 
 type LogContext = Record<string, any>;
 
+/** Headers that carry Creatio credentials (Bearer or Forms-auth cookie session). */
+const AUTH_HEADER_KEYS = ['Authorization', 'Cookie', 'BPMCSRF', 'ForceUseSession'] as const;
+
 export class CreatioHttpClient {
 	private readonly _config: CreatioClientConfig;
 	private readonly _authManager: CreatioAuthManager;
@@ -73,6 +76,26 @@ export class CreatioHttpClient {
 		return false;
 	}
 
+	/**
+	 * Re-stamps the auth headers on a retry. Most callers build their `RequestInit` (headers included)
+	 * once, BEFORE calling {@link fetchWithAuth}, so their factory replays the pre-refresh token — the
+	 * retry would then hit the same 401 and the refresh would be wasted. Only the auth-carrying headers
+	 * are replaced, so the caller's `Accept`/`Content-Type` stay as they were.
+	 */
+	private async _withFreshAuth(requestInit: RequestInit): Promise<RequestInit> {
+		const fresh = await this.authProvider.getHeaders(JSON_ACCEPT, false);
+		const headers: Record<string, string> = {
+			...((requestInit.headers as Record<string, string> | undefined) ?? {}),
+		};
+		for (const key of AUTH_HEADER_KEYS) {
+			delete headers[key];
+			if (fresh[key] !== undefined) {
+				headers[key] = fresh[key];
+			}
+		}
+		return { ...requestInit, headers };
+	}
+
 	public async getJsonHeaders(): Promise<Record<string, string>> {
 		return this.authProvider.getHeaders(JSON_ACCEPT, true);
 	}
@@ -119,7 +142,10 @@ export class CreatioHttpClient {
 	public async fetchWithAuth(url: string, initFactory: RequestFactory): Promise<Response> {
 		let hasTriedRefresh = false;
 		while (true) {
-			const requestInit = await initFactory();
+			let requestInit = await initFactory();
+			if (hasTriedRefresh) {
+				requestInit = await this._withFreshAuth(requestInit);
+			}
 			this._logRequest(url, requestInit);
 			const response = await fetch(url, requestInit);
 			if (!this._looksLikeAuthBounce(response)) {
@@ -127,6 +153,9 @@ export class CreatioHttpClient {
 			}
 			this._logUnauthorizedResponse(url, response, hasTriedRefresh);
 			if (hasTriedRefresh) {
+				// Still rejected with freshly refreshed credentials: they are dead. Let the provider
+				// drop them (broker: forces the client to re-authorize instead of failing forever).
+				await this.authProvider.invalidate?.();
 				return response;
 			}
 			hasTriedRefresh = true;

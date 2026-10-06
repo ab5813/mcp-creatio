@@ -10,6 +10,9 @@ export interface ICreatioAuthProvider {
 	type: AuthProviderType;
 	getHeaders(accept: string, isJson?: boolean): Promise<Record<string, string>>;
 	refresh(): Promise<void>;
+	/** Drops credentials Creatio still rejects after a refresh. Optional; only stateful providers
+	 *  (broker) hold anything worth dropping. */
+	invalidate?(): Promise<void>;
 	/** Cancels any background timers. Safe no-op for providers without them. */
 	cancelAllRefresh(): void;
 }

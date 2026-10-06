@@ -18,7 +18,8 @@ export class FileEngine extends BaseEngine {
 
 	/** Read-only: a download bypasses the mutate guard, like every other read, so it stays
 	 *  available in readonly mode. */
-	public download(request: FileDownloadRequest): Promise<FileDownloadResult> {
+	public async download(request: FileDownloadRequest): Promise<FileDownloadResult> {
+		this._entityAccess.assertEntity(request.entity);
 		return this._provider.download(request);
 	}
 }

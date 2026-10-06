@@ -16,6 +16,7 @@ import { ConfigurationEngine } from './configuration-engine';
 import { CrudEngine } from './crud-engine';
 import { CreatioEngine, EngineEnv } from './engine';
 import { EngineRegistry, EngineType } from './engine-registry';
+import { EntityAccessPolicy } from './entity-access';
 import { FeatureEngine } from './feature-engine';
 import { FileEngine } from './file-engine';
 import { ProcessEngine } from './process-engine';
@@ -43,6 +44,8 @@ export interface EngineManagerOptions {
 	readonly?: boolean;
 	/** Override the audit sink (defaults to `log.audit`). */
 	audit?: EngineEnv['audit'];
+	/** Entity allowlist enforced by the CRUD and file engines (default: unrestricted). */
+	entityAccess?: EntityAccessPolicy;
 }
 
 export class CreatioEngineManager {
@@ -57,6 +60,10 @@ export class CreatioEngineManager {
 
 	public get readonly(): boolean {
 		return this._env.readonly;
+	}
+
+	public get entityAccess(): EntityAccessPolicy | undefined {
+		return this._env.entityAccess;
 	}
 
 	public get registry(): EngineRegistry {
@@ -107,6 +114,7 @@ export class CreatioEngineManager {
 		this._env = {
 			readonly: options?.readonly ?? false,
 			audit: options?.audit ?? ((action, details) => log.audit(action, details)),
+			...(options?.entityAccess ? { entityAccess: options.entityAccess } : {}),
 		};
 		this._initialize();
 	}

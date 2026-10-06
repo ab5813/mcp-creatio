@@ -168,4 +168,63 @@ describe('CreatioHttpClient', () => {
 			),
 		).rejects.toThrow(/network down/);
 	});
+
+	it('retries with the refreshed token even when the caller built its headers up front', async () => {
+		let token = 'stale';
+		const refresh = vi.fn(async () => {
+			token = 'fresh';
+		});
+		const invalidate = vi.fn(async () => {});
+		const provider = {
+			async getHeaders() {
+				return { Authorization: `Bearer ${token}` };
+			},
+			refresh,
+			invalidate,
+		};
+		const client = new CreatioHttpClient(
+			{ baseUrl: 'https://tenant.creatio.local/', auth: { kind: 'oauth2' } } as never,
+			{ getProvider: () => provider } as never,
+		);
+		const seen: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, init: RequestInit) => {
+				const auth = (init.headers as Record<string, string>).Authorization;
+				seen.push(auth);
+				return new Response('', { status: auth === 'Bearer fresh' ? 200 : 401 });
+			}),
+		);
+		// Mirrors the service providers: headers captured once, replayed by the factory.
+		const init = {
+			method: 'POST',
+			headers: { Accept: 'application/xml', Authorization: 'Bearer stale' },
+		};
+		const res = await client.fetchWithAuth('https://x/y', async () => init);
+		expect(res.status).toBe(200);
+		expect(seen).toEqual(['Bearer stale', 'Bearer fresh']);
+		expect(invalidate).not.toHaveBeenCalled();
+	});
+
+	it('invalidates the provider credentials when the retry is still rejected', async () => {
+		const invalidate = vi.fn(async () => {});
+		const provider = {
+			async getHeaders() {
+				return { Authorization: 'Bearer t' };
+			},
+			refresh: vi.fn(async () => {}),
+			invalidate,
+		};
+		const client = new CreatioHttpClient(
+			{ baseUrl: 'https://tenant.creatio.local/', auth: { kind: 'oauth2' } } as never,
+			{ getProvider: () => provider } as never,
+		);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('', { status: 401 })),
+		);
+		const res = await client.fetchWithAuth('https://x/y', async () => ({}));
+		expect(res.status).toBe(401);
+		expect(invalidate).toHaveBeenCalledTimes(1);
+	});
 });

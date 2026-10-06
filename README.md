@@ -311,6 +311,7 @@ nothing works without it; the rest depend on the auth method and the features yo
 | ----------------------------------- | ------------------------------------------------- |
 | `CREATIO_MCP_CRUD_BACKEND`          | CRUD data API: `dataservice` (default) or `odata` |
 | `CREATIO_MCP_READONLY`              | `true` disables create/update/delete operations   |
+| `CREATIO_MCP_ALLOWED_ENTITIES`      | Comma-separated entity allowlist (see below)      |
 | `CREATIO_MCP_DISABLE_DATAFORGE`     | `true` skips the DataForge probe **and** tools    |
 | `CREATIO_MCP_DISABLE_GLOBAL_SEARCH` | `true` skips the Global Search probe **and** tool |
 
@@ -323,6 +324,14 @@ nothing works without it; the rest depend on the auth method and the features yo
 | `CREATIO_MCP_LOG_LEVEL`         | Log verbosity: `silent` (default), `error`, `warn`, `info`                                                                                                                                                                                                                                         |
 | `CREATIO_MCP_KEEPALIVE_SECONDS` | _Optional_ — proactive session keep-alive interval (seconds) for `legacy` / `client_credentials`, to avoid first-call re-login latency after an idle period. **Defaults to `300` (5 min)**; set `0` to disable. Keep it below the Creatio idle-session timeout                                     |
 | `CREATIO_MCP_PUBLIC_URL`        | _Optional_ — the deployment's public origin (e.g. `https://mcp.example.com`). Set it when behind a TLS-terminating proxy/ingress so the broker's issuer/audience, redirect URIs, and discovery metadata use the external URL (not the internal `http://host:port`). Defaults to the request origin |
+
+> **Restricting to specific objects.** `CREATIO_MCP_ALLOWED_ENTITIES=Report,NormativeDocuments`
+> limits the deployment to those objects and their attachment objects (`ReportFile`,
+> `NormativeDocumentsFile`). Only `list-entities`, `describe-entity`, `read`, `read-file` (and
+> `create`/`update`/`delete` unless readonly) are exposed; reads cannot follow lookups into other
+> objects (`Owner.Name` is refused, `OwnerId` / `Owner.Id` are fine); DataForge, Global Search and
+> published tools are disabled. Combine with `CREATIO_MCP_READONLY=true` for read-only access.
+> Creatio's own per-user permissions still apply on top.
 
 > **Disabling optional capabilities.** DataForge and Global Search are auto-detected at startup and
 > registered only when supported. Set `CREATIO_MCP_DISABLE_DATAFORGE=true` /

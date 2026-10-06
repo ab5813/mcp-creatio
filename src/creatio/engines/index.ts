@@ -1,6 +1,7 @@
 export * from './engine';
 export * from './engine-manager';
 export * from './engine-registry';
+export * from './entity-access';
 export * from './admin-operation-engine';
 export * from './configuration-engine';
 export * from './crud-engine';

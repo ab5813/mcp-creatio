@@ -1,5 +1,7 @@
 import log from '../../log';
 
+import { EntityAccessPolicy, UNRESTRICTED_ENTITY_ACCESS } from './entity-access';
+
 export interface CreatioEngine {
 	readonly name: string;
 }
@@ -13,10 +15,13 @@ export interface CreatioEngine {
  *   mutating tools in readonly mode; this guarantees a mutation throws even if some
  *   future caller reaches an engine directly.
  * - `audit` — a security-relevant trail for every mutation, independent of transport.
+ * - `entityAccess` — the optional entity allowlist enforced by the CRUD and file engines.
  */
 export interface EngineEnv {
 	readonly readonly: boolean;
 	audit(action: string, details?: Record<string, unknown>): void;
+	/** Entity allowlist; absent ⇒ unrestricted. */
+	readonly entityAccess?: EntityAccessPolicy;
 }
 
 /** Thrown when a mutating engine operation is attempted while `readonly` is on. */
@@ -46,6 +51,10 @@ export abstract class BaseEngine implements CreatioEngine {
 	public abstract readonly name: string;
 
 	protected readonly _env: EngineEnv;
+
+	protected get _entityAccess(): EntityAccessPolicy {
+		return this._env.entityAccess ?? UNRESTRICTED_ENTITY_ACCESS;
+	}
 
 	constructor(env: EngineEnv = DEFAULT_ENGINE_ENV) {
 		this._env = env;
