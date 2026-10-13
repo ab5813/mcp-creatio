@@ -209,6 +209,18 @@ export class BrokerHandlers {
 			);
 			const userKey = inspectBearer(tokens.accessToken).userKey;
 			await this._session.setTokensForUser(userKey, tokens);
+			const lifetimeSec = Math.round((tokens.accessTokenExpiryMs - Date.now()) / 1000);
+			if (tokens.refreshToken) {
+				log.info('broker.login', { userKey, lifetimeSec, hasRefreshToken: true });
+			} else {
+				// Without a refresh token the session dies with the access token (minutes): the
+				// client is then forced through a full re-authorization. Fix on the Creatio side.
+				log.warn('broker.login.no_refresh_token', {
+					userKey,
+					lifetimeSec,
+					hint: 'Creatio issued no refresh token — allow offline_access / refresh tokens on the Creatio OAuth app',
+				});
+			}
 			const mcpCode = this._oauth.generateAuthorizationCode(
 				pending.client_id,
 				pending.redirect_uri,

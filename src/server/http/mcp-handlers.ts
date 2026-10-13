@@ -59,7 +59,15 @@ export class McpHandlers {
 			// only), bound to the request's tenant. Release it when the transport closes so we
 			// don't leak servers or register late-probed tools into dead sessions.
 			const mcp = this._server.createSessionServer(baseUrlOverride);
+			// Closing re-enters: releaseSessionServer → mcp.close() → transport.close() → onclose.
+			// Without this guard a client DELETE recursed until the stack overflowed and the
+			// process crashed (losing every in-memory session and broker token).
+			let closed = false;
 			transport.onclose = () => {
+				if (closed) {
+					return;
+				}
+				closed = true;
 				this._server.releaseSessionServer(mcp);
 				if (transport?.sessionId) {
 					log.sessionDisconnect(transport.sessionId, String(remoteIp));

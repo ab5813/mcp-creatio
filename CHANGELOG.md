@@ -6,6 +6,16 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Server crashed when a client closed its MCP session** — a client `DELETE /mcp` (Open WebUI
+  sends one after every chat message) made the session-close handler re-enter itself
+  (`onclose` → `mcp.close()` → `transport.close()` → `onclose` …) until the stack overflowed and
+  the process died. Every in-memory session and broker token was lost, so the client's next
+  message failed with "Failed to connect to MCP server" or a 401. Close is now idempotent.
+- **Broker login logs** whether Creatio issued a refresh token and the access-token lifetime
+  (`broker.login` / `broker.login.no_refresh_token`).
+
 ### Added
 
 - **`CREATIO_MCP_ALLOWED_ENTITIES` — entity allowlist** — comma-separated Creatio objects the
