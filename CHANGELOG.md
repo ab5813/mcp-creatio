@@ -6,18 +6,20 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+## [0.7.1] — 2026-10-14
 
-- **Server crashed when a client closed its MCP session** — a client `DELETE /mcp` (Open WebUI
-  sends one after every chat message) made the session-close handler re-enter itself
-  (`onclose` → `mcp.close()` → `transport.close()` → `onclose` …) until the stack overflowed and
-  the process died. Every in-memory session and broker token was lost, so the client's next
-  message failed with "Failed to connect to MCP server" or a 401. Close is now idempotent.
-- **Broker login logs** whether Creatio issued a refresh token and the access-token lifetime
-  (`broker.login` / `broker.login.no_refresh_token`).
+Fixes the crash that logged Open WebUI users out after every message, adds the entity allowlist,
+and makes the running build identifiable from outside.
 
 ### Added
 
+- **Build fingerprint on `GET /healthz`** — `commit`, `sourceHash` and `builtAt`, also in the
+  startup banner. `sourceHash` is a hash of the source itself, computed at build time without git
+  or build args, so a stale image is detectable even when the builder passes nothing; compare
+  with `node scripts/build-info.mjs --print` on the expected commit. Docker builds take
+  `--build-arg GIT_SHA=…` for the commit.
+- **Images on GHCR** — CI publishes every `main` build to `ghcr.io/ab5813/mcp-creatio` with the
+  moving `latest` plus immutable `vX.Y.Z` and `sha-<commit>` tags for pinned deployments.
 - **`CREATIO_MCP_ALLOWED_ENTITIES` — entity allowlist** — comma-separated Creatio objects the
   deployment may touch (plus their `<Entity>File` attachment objects). Enforced in the CRUD and
   file engines: `list-entities` is filtered, `describe-entity`/`read`/`read-file`/writes on other
@@ -27,6 +29,16 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ### Fixed
 
+- **Unhandled promise rejections no longer kill the process** — they are logged
+  (`process.unhandled_rejection`) and the server keeps serving, instead of dropping every
+  session and broker token held in memory.
+- **Server crashed when a client closed its MCP session** — a client `DELETE /mcp` (Open WebUI
+  sends one after every chat message) made the session-close handler re-enter itself
+  (`onclose` → `mcp.close()` → `transport.close()` → `onclose` …) until the stack overflowed and
+  the process died. Every in-memory session and broker token was lost, so the client's next
+  message failed with "Failed to connect to MCP server" or a 401. Close is now idempotent.
+- **Broker login logs** whether Creatio issued a refresh token and the access-token lifetime
+  (`broker.login` / `broker.login.no_refresh_token`).
 - **401 retry replayed the stale token** — callers that built their headers before
   `fetchWithAuth` (DataService, sys settings, processes, …) retried a 401 with the pre-refresh
   credentials, so the refresh never helped. The retry now re-stamps the auth headers.

@@ -1,4 +1,4 @@
-import { NAME, VERSION } from '../../version';
+import { BUILD_INFO, NAME, VERSION } from '../../version';
 
 import type { Express, Request, Response } from 'express';
 
@@ -28,6 +28,11 @@ export class HealthEndpoints {
 				status: 'ok',
 				name: NAME,
 				version: VERSION,
+				// Which code is running — the commit (when the build knew it) and a hash of the
+				// source itself, so a stale image is detectable without access to the deployment.
+				commit: BUILD_INFO.commit,
+				sourceHash: BUILD_INFO.sourceHash,
+				builtAt: BUILD_INFO.builtAt,
 				uptimeSec: Math.floor((Date.now() - this._startedAt) / 1000),
 			});
 		});

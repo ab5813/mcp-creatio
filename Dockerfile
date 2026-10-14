@@ -7,11 +7,18 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
-RUN npm run build
+# Deployment fingerprint (served on GET /healthz). Pass the commit when building:
+#   docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .
+# Without it /healthz still reports a hash of the source, so the running code stays identifiable.
+ARG GIT_SHA=""
+RUN GIT_SHA="$GIT_SHA" npm run build
 
 # ---- runtime ----
 FROM node:24-alpine AS runtime
 WORKDIR /app
+ARG GIT_SHA=""
+LABEL org.opencontainers.image.source="https://github.com/ab5813/mcp-creatio" \
+	org.opencontainers.image.revision="$GIT_SHA"
 ENV NODE_ENV=production
 # Transport: "http" (default, web service) or "stdio" (run with `docker run -i …`).
 ENV CREATIO_MCP_TRANSPORT=http

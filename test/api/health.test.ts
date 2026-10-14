@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { VERSION } from '../../src/version';
+import { BUILD_INFO, VERSION } from '../../src/version';
 import { createTestServer, resetSessionContext } from '../support/test-server';
 
 describe('Health endpoints', () => {
@@ -16,6 +16,14 @@ describe('Health endpoints', () => {
 		expect(res.body.status).toBe('ok');
 		expect(res.body.version).toBe(VERSION);
 		expect(typeof res.body.uptimeSec).toBe('number');
+	});
+
+	it('GET /healthz carries the build fingerprint (commit + source hash)', async () => {
+		const { app } = createTestServer();
+		const res = await request(app).get('/healthz');
+		expect(res.body.commit).toBe(BUILD_INFO.commit);
+		expect(res.body.sourceHash).toBe(BUILD_INFO.sourceHash);
+		expect(res.body.builtAt).toBe(BUILD_INFO.builtAt);
 	});
 
 	it('GET /readyz is 503 before the server starts listening', async () => {

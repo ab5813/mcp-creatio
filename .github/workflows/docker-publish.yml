@@ -44,6 +44,17 @@ jobs:
                   username: ${{ secrets.DOCKER_USERNAME }}
                   password: ${{ secrets.DOCKER_PASSWORD }}
 
+            # Every build is also published to this repository's own GitHub Container Registry
+            # (no extra secrets — GITHUB_TOKEN). Besides the moving `latest`, each image gets
+            # immutable tags (vX.Y.Z and sha-<commit>) so a deployment can pin exactly one build
+            # instead of re-pulling a mutable tag that a node may have cached.
+            - name: GHCR login
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
             - name: Compute Docker tags from package.json
               id: vars
               shell: bash
@@ -53,15 +64,24 @@ jobs:
                     echo "Package version is empty" >&2
                     exit 1
                   fi
-                  echo "tags=crackish/mcp-creatio:latest,crackish/mcp-creatio:v${VERSION}" >> $GITHUB_OUTPUT
+                  GHCR="ghcr.io/${GITHUB_REPOSITORY,,}"
+                  SHORT="${GITHUB_SHA::7}"
+                  TAGS="${GHCR}:latest,${GHCR}:v${VERSION},${GHCR}:sha-${SHORT}"
+                  if [[ "${{ steps.creds.outputs.available }}" == "true" ]]; then
+                    TAGS="${TAGS},crackish/mcp-creatio:latest,crackish/mcp-creatio:v${VERSION}"
+                  fi
+                  echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+                  echo "Image tags: ${TAGS}" >> $GITHUB_STEP_SUMMARY
 
             - name: Build and push
               uses: docker/build-push-action@v7
               with:
                   context: .
-                  push: ${{ steps.creds.outputs.available == 'true' }}
+                  push: true
                   platforms: linux/amd64,linux/arm64
                   tags: ${{ steps.vars.outputs.tags }}
+                  build-args: |
+                      GIT_SHA=${{ github.sha }}
 
             # Sync the repo README to the Docker Hub repository "Overview" (it is NOT
             # auto-populated from GitHub). Reuses the same Docker Hub credentials.

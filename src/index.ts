@@ -16,7 +16,7 @@ import {
 } from './server';
 import { SessionContext, TokenStore, createTokenStore } from './sessions';
 import { envBool } from './utils';
-import { NAME, VERSION } from './version';
+import { BUILD_INFO, NAME, VERSION } from './version';
 
 let _httpInstance: HttpServer | undefined;
 let _keepAlive: SessionKeepAlive | undefined;
@@ -40,6 +40,8 @@ async function main() {
 	log.info('app.banner', {
 		name: NAME,
 		version: VERSION,
+		commit: BUILD_INFO.commit,
+		sourceHash: BUILD_INFO.sourceHash,
 		authMode: cfg.auth.kind,
 		readonly: envBool('CREATIO_MCP_READONLY', false),
 		allowedEntities: process.env['CREATIO_MCP_ALLOWED_ENTITIES'] || '(all)',
@@ -102,6 +104,14 @@ async function shutdown(signal?: string) {
 main().catch((err) => {
 	log.error('startup.error', { error: String(err) });
 	process.exit(1);
+});
+
+// A stray rejected promise (e.g. a background probe or a closed stream) must not take down a
+// multi-user server and every session and token it holds in memory: log it and keep serving.
+process.on('unhandledRejection', (reason) => {
+	log.error('process.unhandled_rejection', {
+		error: String((reason as Error)?.stack ?? reason),
+	});
 });
 
 process.on('SIGINT', () => shutdown('SIGINT'));

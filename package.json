@@ -1,6 +1,6 @@
 {
 	"name": "mcp-creatio",
-	"version": "0.7.0",
+	"version": "0.7.1",
 	"main": "dist/index.js",
 	"bin": {
 		"mcp-creatio": "dist/cli.js"
@@ -15,6 +15,7 @@
 		"clean": "rimraf ./dist",
 		"prebuild": "npm run clean",
 		"build": "tsc",
+		"postbuild": "node scripts/build-info.mjs",
 		"start": "ts-node src/index.ts",
 		"start:cli": "ts-node src/cli.ts",
 		"start:stdio": "ts-node src/cli.ts",
