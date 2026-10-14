@@ -6,6 +6,15 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-14
+
+### Fixed
+
+- **A refused DataService read looked like an empty result** — when Creatio answered a
+  `SelectQuery` with `success: false` and no rows (missing read rights, a server-side error, …), the
+  read returned zero records instead of the error. Reads and counts now surface it as
+  `creatio_dataservice_SelectQuery_error:<Creatio message>`.
+
 ## [0.8.0] — 2026-10-14
 
 The broker no longer keeps any per-user state, so restarts, redeploys and extra replicas no longer

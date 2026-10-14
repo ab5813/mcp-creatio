@@ -6,8 +6,8 @@ import { CreatioHttpClient } from '../http-client';
  * the logical-failure check so the CRUD provider and schema helper share one code path.
  * DataService answers HTTP 200 even on logical failures, signalling them via
  * `success: false` + `responseStatus`; `checkSuccess` (writes) turns that into an error.
- * Reads skip the flag and rely on the returned `rows` (a SelectQuery does not reliably set
- * `success`).
+ * Reads use {@link assertSuccess} only for a failure that returned no rows (a SelectQuery does
+ * not reliably set `success`, but a refused one must not pass for an empty result).
  */
 export class DataServiceTransport {
 	private readonly _client: CreatioHttpClient;
@@ -16,7 +16,7 @@ export class DataServiceTransport {
 		this._client = client;
 	}
 
-	private _assertSuccess(operation: string, body: any): void {
+	public assertSuccess(operation: string, body: any): void {
 		if (body && body.success === false) {
 			const rs = body.responseStatus ?? {};
 			const message =
@@ -56,7 +56,7 @@ export class DataServiceTransport {
 			async (response, duration) => {
 				const body = await response.json().catch(() => ({}));
 				if (opts.checkSuccess) {
-					this._assertSuccess(operation, body);
+					this.assertSuccess(operation, body);
 				}
 				this._client.logSuccess(
 					`dataservice.${operation}`,

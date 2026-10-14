@@ -382,6 +382,32 @@ describe('DataServiceCrudProvider write (Insert/Update/Delete + coercion)', () =
 		expect(calls[0].body.filters.rightExpression.parameter.value).toBe(GUID3);
 	});
 
+	it('surfaces a refused read (success:false, no rows) as an error, not an empty result', async () => {
+		const { client } = makeClient([
+			{ success: false, responseStatus: { Message: 'Insufficient rights' }, rows: [] },
+		]);
+		const provider = new DataServiceCrudProvider(client as never);
+		await expect(provider.read({ entity: 'CfTcReports', columns: ['Id'] })).rejects.toThrow(
+			/creatio_dataservice_SelectQuery_error:Insufficient rights/,
+		);
+	});
+
+	it('surfaces a refused count the same way', async () => {
+		const { client } = makeClient([{ success: false, errorInfo: { message: 'denied' } }]);
+		const provider = new DataServiceCrudProvider(client as never);
+		await expect(provider.read({ entity: 'CfTcReports', top: 0, count: true })).rejects.toThrow(
+			/creatio_dataservice_SelectQuery_error:denied/,
+		);
+	});
+
+	it('still returns rows when a read carries success:false alongside data', async () => {
+		const { client } = makeClient([{ success: false, rows: [{ Id: '1' }] }]);
+		const provider = new DataServiceCrudProvider(client as never);
+		await expect(provider.read({ entity: 'Contact', columns: ['Id'] })).resolves.toEqual({
+			items: [{ Id: '1' }],
+		});
+	});
+
 	it('surfaces a logical failure (success:false) as an error on writes', async () => {
 		const { client } = makeClient([
 			schemaResponse,

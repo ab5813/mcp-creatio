@@ -70,6 +70,14 @@ export class DataServiceCrudProvider implements CrudProvider {
 		return Array.isArray(body?.rows) ? body.rows : [];
 	}
 
+	/** A SelectQuery Creatio refused (no read rights, server error, …) answers HTTP 200 with
+	 *  `success: false` and no rows — it must surface as that error, not as an empty result. */
+	private _assertReadSucceeded(body: any): void {
+		if (body?.success === false && this._rows(body).length === 0) {
+			this._transport.assertSuccess('SelectQuery', body);
+		}
+	}
+
 	private _extractCount(body: any): number | undefined {
 		const rows = this._rows(body);
 		const raw = rows.length ? rows[0]?.[COUNT_COLUMN_ALIAS] : undefined;
@@ -147,6 +155,7 @@ export class DataServiceCrudProvider implements CrudProvider {
 			const body = await this._transport.post('SelectQuery', select, {
 				logContext: { entity: query.entity, top: query.top, skip: query.skip },
 			});
+			this._assertReadSucceeded(body);
 			if (body?.notFoundColumns?.length) {
 				log.warn('creatio.dataservice.read.not_found_columns', {
 					entity: query.entity,
@@ -163,6 +172,7 @@ export class DataServiceCrudProvider implements CrudProvider {
 			this._queryBuilder.buildCountQuery(query),
 			{ logContext: { entity: query.entity, count: true } },
 		);
+		this._assertReadSucceeded(countBody);
 		const totalCount = this._extractCount(countBody);
 		return totalCount !== undefined ? { items, totalCount } : { items };
 	}
