@@ -1,6 +1,7 @@
 import log from '../../log';
 
 import type { OAuthClient } from './types';
+import type { UserTokens } from '../../sessions';
 
 export interface AuthorizationCodeData {
 	client_id: string;
@@ -8,6 +9,8 @@ export interface AuthorizationCodeData {
 	code_challenge: string;
 	code_challenge_method: string;
 	userKey: string;
+	/** The user's Creatio tokens from the brokered login, handed out (sealed) at /token. */
+	creatio: UserTokens;
 	expires_at: number;
 }
 
@@ -31,26 +34,15 @@ export interface PendingAuthorizationData {
 	expires_at: number;
 }
 
-/** A refresh token the broker issued to a client, bound to the user it represents and the client
- *  it was issued to (so a stolen token can't be redeemed by a different client). Single-use:
- *  rotated on every refresh. */
-export interface RefreshTokenData {
-	userKey: string;
-	client_id: string;
-	expires_at: number;
-}
-
 export class OAuthStorage {
 	// Dynamically-registered clients are unauthenticated (open DCR), so the store is bounded by TTL
 	// + a hard cap, evicting the oldest, to deny a memory-exhaustion DoS via IP-rotating /register.
 	private static readonly CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 	private static readonly MAX_CLIENTS = 1000;
-	private static readonly REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 	private readonly _clients = new Map<string, OAuthClient>();
 	private readonly _authorizationCodes = new Map<string, AuthorizationCodeData>();
 	private readonly _pendingAuthorizations = new Map<string, PendingAuthorizationData>();
-	private readonly _refreshTokens = new Map<string, RefreshTokenData>();
 
 	private _evictExpired(map: Map<string, { expires_at: number }>, now: number): void {
 		for (const [key, data] of map.entries()) {
@@ -100,6 +92,7 @@ export class OAuthStorage {
 		code_challenge: string,
 		code_challenge_method: string,
 		userKey: string,
+		creatio: UserTokens,
 		expiresInMs: number = 10 * 60 * 1000,
 	): void {
 		const expires_at = Date.now() + expiresInMs;
@@ -109,6 +102,7 @@ export class OAuthStorage {
 			code_challenge,
 			code_challenge_method,
 			userKey,
+			creatio,
 			expires_at,
 		});
 	}
@@ -142,55 +136,14 @@ export class OAuthStorage {
 		return Date.now() > data.expires_at ? undefined : data;
 	}
 
-	public storeRefreshToken(
-		token: string,
-		userKey: string,
-		client_id: string,
-		expiresInMs: number = OAuthStorage.REFRESH_TOKEN_TTL_MS,
-	): void {
-		this._refreshTokens.set(token, {
-			userKey,
-			client_id,
-			expires_at: Date.now() + expiresInMs,
-		});
-	}
-
-	/** Returns the refresh-token record, or `undefined` if absent/expired (expired ones are pruned). */
-	public getRefreshToken(token: string): RefreshTokenData | undefined {
-		const data = this._refreshTokens.get(token);
-		if (!data) {
-			return undefined;
-		}
-		if (Date.now() > data.expires_at) {
-			this._refreshTokens.delete(token);
-			return undefined;
-		}
-		return data;
-	}
-
-	public deleteRefreshToken(token: string): void {
-		this._refreshTokens.delete(token);
-	}
-
-	/** Drop every refresh token issued for a user (logout / revoke). */
-	public deleteRefreshTokensForUser(userKey: string): void {
-		for (const [token, data] of this._refreshTokens) {
-			if (data.userKey === userKey) {
-				this._refreshTokens.delete(token);
-			}
-		}
-	}
-
 	public cleanup(): void {
 		const now = Date.now();
 		this._evictExpired(this._authorizationCodes, now);
 		this._evictExpired(this._pendingAuthorizations, now);
-		this._evictExpired(this._refreshTokens, now);
 		this._evictExpiredClients(now);
 		log.info('oauth.storage.cleanup.completed', {
 			remaining_codes: this._authorizationCodes.size,
 			remaining_pending: this._pendingAuthorizations.size,
-			remaining_refresh: this._refreshTokens.size,
 			remaining_clients: this._clients.size,
 		});
 	}

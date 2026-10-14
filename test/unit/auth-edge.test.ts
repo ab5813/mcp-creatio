@@ -100,7 +100,7 @@ describe('createAuthEdge', () => {
 		it('cleanup invokes oauth + session maintenance without throwing', () => {
 			resetSessionContext();
 			const session = SessionContext.instance;
-			const evictSpy = vi.spyOn(session, 'evictStaleTokens').mockResolvedValue(0);
+			const evictSpy = vi.spyOn(session, 'evictRejectedCreatioTokens').mockReturnValue(0);
 			const edge = createAuthEdge(brokerConfig, session);
 			expect(edge!.cleanup).toBeTypeOf('function');
 			expect(() => edge!.cleanup!()).not.toThrow();

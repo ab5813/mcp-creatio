@@ -22,6 +22,8 @@ export interface TokenAudience {
 export interface DecodedAccessToken {
 	userKey: string;
 	client_id: string;
+	/** The sealed Creatio access token (`ct` claim), opened by the {@link TokenSealer}. */
+	sealedCreatio: string;
 }
 
 export class OAuthTokenManager {
@@ -31,19 +33,21 @@ export class OAuthTokenManager {
 		this._jwtSecret = jwtSecret;
 	}
 
-	/** Mint a 1h access token bound to `userKey` (as `sub`), the issuing `client_id`, and the
-	 *  deployment's `iss`/`aud`. */
-	public generateAccessToken(userKey: string, client_id: string, aud: TokenAudience): string {
-		return jwt.sign({ client_id }, this._jwtSecret, {
+	/** Mint an access token bound to `userKey` (as `sub`), the issuing `client_id`, and the
+	 *  deployment's `iss`/`aud`, carrying the sealed Creatio access token as `ct`. */
+	public generateAccessToken(
+		userKey: string,
+		client_id: string,
+		aud: TokenAudience,
+		sealedCreatio: string,
+		expiresInSeconds: number,
+	): string {
+		return jwt.sign({ client_id, ct: sealedCreatio }, this._jwtSecret, {
 			subject: userKey,
-			expiresIn: '1h',
+			expiresIn: expiresInSeconds,
 			issuer: aud.issuer,
 			audience: aud.audience,
 		});
-	}
-
-	public generateRefreshToken(): string {
-		return crypto.randomBytes(32).toString('base64url');
 	}
 
 	/** Verify signature AND issuer/audience binding; return the trusted claims or `null`. */
@@ -55,7 +59,8 @@ export class OAuthTokenManager {
 			}) as jwt.JwtPayload;
 			const userKey = typeof decoded.sub === 'string' ? decoded.sub : null;
 			const client_id = typeof decoded.client_id === 'string' ? decoded.client_id : '';
-			return userKey ? { userKey, client_id } : null;
+			const sealedCreatio = typeof decoded.ct === 'string' ? decoded.ct : null;
+			return userKey && sealedCreatio ? { userKey, client_id, sealedCreatio } : null;
 		} catch (error) {
 			log.warn('oauth.token.invalid', { error: String(error) });
 			return null;

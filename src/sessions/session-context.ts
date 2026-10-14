@@ -1,8 +1,8 @@
+import crypto from 'node:crypto';
+
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 import log from '../log';
-
-import { InMemoryTokenStore, TokenStore } from './token-store';
 
 export interface SessionInfo {
 	id: string;
@@ -14,15 +14,18 @@ export interface SessionInfo {
 }
 
 /**
- * A user's Creatio tokens, held per `userKey` in `broker` mode (the MCP brokered the login, so it
- * owns the refresh lifecycle). Other modes store nothing here.
+ * A user's Creatio tokens as obtained by the `broker` login / refresh. The broker stores none of
+ * them server-side: they travel sealed inside the tokens it issues to the client (see
+ * `server/oauth/sealed-tokens.ts`), so a restart or another replica loses nothing.
  */
 export interface UserTokens {
 	accessToken: string;
 	accessTokenExpiryMs: number;
 	refreshToken?: string | undefined;
-	/** When stored/last refreshed; drives idle eviction. */
-	storedAtMs?: number | undefined;
+}
+
+function tokenFingerprint(token: string): string {
+	return crypto.createHash('sha256').update(token).digest('base64url');
 }
 
 /**
@@ -36,20 +39,16 @@ export class SessionContext {
 	private static _instance: SessionContext | undefined;
 	private readonly _sessions = new Map<string, SessionInfo>();
 	private readonly _deletingSessions = new Set<string>();
-	// Broker-mode Creatio token store. Defaults to in-memory (single instance, lost on restart);
-	// swapped for the Redis store at startup via {@link setTokenStore} when configured.
-	private _tokenStore: TokenStore = new InMemoryTokenStore();
+	// Broker: Creatio access tokens that Creatio rejected although they were not yet expired
+	// (fingerprint → expiry ms). The edge answers 401 for them so the client refreshes instead of
+	// failing every call until the token's natural expiry. Self-limiting: entries die with the token.
+	private readonly _rejectedCreatioTokens = new Map<string, number>();
 
 	public static get instance(): SessionContext {
 		if (!SessionContext._instance) {
 			SessionContext._instance = new SessionContext();
 		}
 		return SessionContext._instance;
-	}
-
-	/** Swap the broker token store (e.g. Redis) — call once at startup, broker mode only. */
-	public setTokenStore(store: TokenStore): void {
-		this._tokenStore = store;
 	}
 
 	public createSession(sessionId: string, userKey?: string, remoteIp?: string): SessionInfo {
@@ -129,22 +128,26 @@ export class SessionContext {
 		return { sessionsCount: this._sessions.size };
 	}
 
-	// --- Per-user Creatio token store (broker mode only) — delegated to the configured TokenStore ---
+	// --- Rejected Creatio access tokens (broker mode) ---
 
-	public getTokensForUser(userKey: string): Promise<UserTokens | null> {
-		return this._tokenStore.get(userKey);
+	/** Remember that Creatio rejected `token`; it is treated as dead until `expiresAtMs`. */
+	public markCreatioTokenRejected(token: string, expiresAtMs: number): void {
+		this._rejectedCreatioTokens.set(tokenFingerprint(token), expiresAtMs);
 	}
 
-	public setTokensForUser(userKey: string, tokens: UserTokens): Promise<void> {
-		return this._tokenStore.set(userKey, tokens);
+	public isCreatioTokenRejected(token: string): boolean {
+		return this._rejectedCreatioTokens.has(tokenFingerprint(token));
 	}
 
-	public deleteTokensForUser(userKey: string): Promise<void> {
-		return this._tokenStore.delete(userKey);
-	}
-
-	/** Evict stale token entries (no-op for a store with native key-expiry, e.g. Redis). */
-	public evictStaleTokens(now: number = Date.now()): Promise<number> {
-		return this._tokenStore.evictStale(now);
+	/** Drop entries whose token has expired anyway; returns how many were removed. */
+	public evictRejectedCreatioTokens(now: number = Date.now()): number {
+		let removed = 0;
+		for (const [fingerprint, expiresAtMs] of this._rejectedCreatioTokens) {
+			if (now > expiresAtMs) {
+				this._rejectedCreatioTokens.delete(fingerprint);
+				removed++;
+			}
+		}
+		return removed;
 	}
 }

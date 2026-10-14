@@ -1,98 +1,49 @@
 import log from '../../../log';
-import { SessionContext, UserTokens } from '../../../sessions';
-import { getEffectiveUserKey } from '../../../utils';
-import { BrokerAuthConfig, CreatioClientConfig } from '../../client-config';
+import { SessionContext } from '../../../sessions';
+import { getEffectiveUserKey, getInjectedCredential } from '../../../utils';
+import { BrokerAuthConfig } from '../../client-config';
 import { buildHeaders } from '../auth';
 
 import { BaseProvider } from './base-provider';
-import { CreatioOAuthClient } from './creatio-oauth-client';
 
 /**
- * Runtime auth provider for `broker` mode. The broker handler has already brokered the user's
- * Creatio login and stored their tokens per `userKey`; this provider only SERVES them: it reads the
- * current request's user tokens, refreshes on demand when expired, and attaches the Bearer. Token
- * acquisition lives in the broker handler — this side never drives the interactive flow (SRP).
+ * Runtime auth provider for `broker` mode. The broker edge has already verified the client's token
+ * and opened the Creatio access token sealed inside it; it arrives here as the request's injected
+ * credential. This provider only attaches it — it holds no tokens and never refreshes on its own:
+ * the client refreshes through the broker's `/token`, which is where the Creatio refresh token lives.
  */
 export class BrokerProvider extends BaseProvider<BrokerAuthConfig> {
 	private readonly _session = SessionContext.instance;
-	private readonly _creatio: CreatioOAuthClient;
-	// Deduplicates concurrent refreshes per user so K parallel requests trigger one refresh, not K
-	// (avoids the thundering herd + rotating-refresh-token races).
-	private readonly _inflightRefresh = new Map<string, Promise<UserTokens>>();
 
-	constructor(config: CreatioClientConfig) {
-		super(config);
-		this._creatio = new CreatioOAuthClient(config.baseUrl, this.authConfig);
-	}
-
-	private async _ensureAccessToken(userKey: string): Promise<string> {
-		const saved = await this._session.getTokensForUser(userKey);
-		if (!saved) {
-			throw new Error('broker_not_authorized');
-		}
-		if (Date.now() < saved.accessTokenExpiryMs) {
-			return saved.accessToken;
-		}
-		if (!saved.refreshToken) {
-			await this._session.deleteTokensForUser(userKey);
-			throw new Error('broker_token_expired');
-		}
-		return (await this._refreshDeduped(userKey, saved.refreshToken)).accessToken;
-	}
-
-	private _refreshDeduped(userKey: string, refreshToken: string): Promise<UserTokens> {
-		const existing = this._inflightRefresh.get(userKey);
-		if (existing) {
-			return existing;
-		}
-		const promise = (async () => {
-			let updated: UserTokens;
-			try {
-				updated = await this._creatio.refresh(refreshToken);
-			} catch (err) {
-				// The refresh token is dead (expired, revoked, or already rotated). Holding on to it
-				// would make every call fail while the client's MCP token stays valid; dropping it
-				// makes the /mcp edge answer 401 invalid_token so the client re-runs the login.
-				// A 5xx / network failure is transient, so the tokens are kept for the next attempt.
-				if (/creatio_oauth_refresh_error:40[01]\b/.test(String((err as Error)?.message))) {
-					await this._session.deleteTokensForUser(userKey);
-				}
-				throw err;
-			}
-			await this._session.setTokensForUser(userKey, updated);
-			return updated;
-		})().finally(() => this._inflightRefresh.delete(userKey));
-		this._inflightRefresh.set(userKey, promise);
-		return promise;
+	private _currentToken(): string | undefined {
+		const credential = getInjectedCredential();
+		return credential?.kind === 'bearer' ? credential.token : undefined;
 	}
 
 	public async getHeaders(accept: string, isJson?: boolean): Promise<Record<string, string>> {
-		const userKey = getEffectiveUserKey();
-		if (!userKey) {
-			throw new Error('broker_no_user');
+		const token = this._currentToken();
+		if (!token) {
+			throw new Error('broker_not_authorized');
 		}
-		return buildHeaders(accept, Boolean(isJson), await this._ensureAccessToken(userKey));
+		return buildHeaders(accept, Boolean(isJson), token);
 	}
 
-	/** Creatio rejected the user's tokens even right after a refresh: drop them so the next /mcp
-	 *  request gets a 401 challenge and the client re-authorizes. */
-	public async invalidate(): Promise<void> {
-		const userKey = getEffectiveUserKey();
-		if (userKey) {
-			log.warn('broker.creatio.tokens_rejected', { userKey });
-			await this._session.deleteTokensForUser(userKey);
-		}
-	}
-
-	/** Forces a refresh for the current user (called by the HTTP client on a 401, then it retries). */
+	/** No server-side refresh: the Creatio refresh token travels with the client's refresh token, so
+	 *  a mid-request 401 is answered by {@link invalidate} and the client's next request refreshes. */
 	public async refresh(): Promise<void> {
-		const userKey = getEffectiveUserKey();
-		if (!userKey) {
+		// Intentionally empty.
+	}
+
+	/** Creatio rejected a Creatio token that had not expired yet (revoked upstream): mark it so the
+	 *  edge answers the next request with `401 invalid_token` and the client refreshes / re-auths. */
+	public async invalidate(): Promise<void> {
+		const token = this._currentToken();
+		if (!token) {
 			return;
 		}
-		const saved = await this._session.getTokensForUser(userKey);
-		if (saved?.refreshToken) {
-			await this._refreshDeduped(userKey, saved.refreshToken);
-		}
+		log.warn('broker.creatio.token_rejected', { userKey: getEffectiveUserKey() });
+		// No broker access token lives longer than an hour, so after that this Creatio token can no
+		// longer be presented and the entry is safe to drop.
+		this._session.markCreatioTokenRejected(token, Date.now() + 60 * 60 * 1000);
 	}
 }

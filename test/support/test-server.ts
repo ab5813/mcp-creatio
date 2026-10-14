@@ -1,7 +1,6 @@
 import { AuthProviderType } from '../../src/creatio';
 import { HttpServer } from '../../src/server/http/http-server';
 import { SessionContext } from '../../src/sessions/session-context';
-import { InMemoryTokenStore } from '../../src/sessions/token-store';
 
 import type { Server } from '../../src/server/mcp';
 
@@ -34,8 +33,9 @@ export function resetSessionContext(): void {
 	};
 	sc._sessions.clear();
 	sc._deletingSessions.clear();
-	// Fresh token store per test for isolation (broker tests stash per-user Creatio tokens).
-	SessionContext.instance.setTokenStore(new InMemoryTokenStore());
+	(
+		SessionContext.instance as unknown as { _rejectedCreatioTokens: Map<string, number> }
+	)._rejectedCreatioTokens.clear();
 }
 
 export function createTestServer() {

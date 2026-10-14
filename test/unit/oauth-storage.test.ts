@@ -13,6 +13,8 @@ function client(id: string, createdAt = Date.now()): OAuthClient {
 	};
 }
 
+const CREATIO = { accessToken: 'AT', accessTokenExpiryMs: Date.now() + 60_000 };
+
 afterEach(() => vi.useRealTimers());
 
 describe('OAuthStorage clients', () => {
@@ -29,10 +31,19 @@ describe('OAuthStorage clients', () => {
 describe('OAuthStorage authorization codes', () => {
 	it('store / get / delete', () => {
 		const s = new OAuthStorage();
-		s.storeAuthorizationCode('code1', 'c1', 'http://localhost:1/cb', 'chal', 'S256', 'u1');
+		s.storeAuthorizationCode(
+			'code1',
+			'c1',
+			'http://localhost:1/cb',
+			'chal',
+			'S256',
+			'u1',
+			CREATIO,
+		);
 		const data = s.getAuthorizationCode('code1');
 		expect(data?.client_id).toBe('c1');
 		expect(data?.userKey).toBe('u1');
+		expect(data?.creatio.accessToken).toBe('AT');
 		s.deleteAuthorizationCode('code1');
 		expect(s.getAuthorizationCode('code1')).toBeUndefined();
 	});
@@ -66,44 +77,29 @@ describe('OAuthStorage pending authorizations', () => {
 	});
 });
 
-describe('OAuthStorage refresh tokens', () => {
-	it('store / get / delete', () => {
-		const s = new OAuthStorage();
-		s.storeRefreshToken('rt1', 'u1', 'c1');
-		expect(s.getRefreshToken('rt1')?.userKey).toBe('u1');
-		s.deleteRefreshToken('rt1');
-		expect(s.getRefreshToken('rt1')).toBeUndefined();
-	});
-
-	it('get of an unknown token is undefined', () => {
-		expect(new OAuthStorage().getRefreshToken('nope')).toBeUndefined();
-	});
-
-	it('expired token is pruned on get', () => {
-		const s = new OAuthStorage();
-		s.storeRefreshToken('rt1', 'u1', 'c1', -1);
-		expect(s.getRefreshToken('rt1')).toBeUndefined();
-		// Pruned, so a second get also misses (no longer present).
-		expect(s.getRefreshToken('rt1')).toBeUndefined();
-	});
-
-	it('deleteRefreshTokensForUser drops only that user', () => {
-		const s = new OAuthStorage();
-		s.storeRefreshToken('rt1', 'u1', 'c1');
-		s.storeRefreshToken('rt2', 'u1', 'c2');
-		s.storeRefreshToken('rt3', 'u2', 'c1');
-		s.deleteRefreshTokensForUser('u1');
-		expect(s.getRefreshToken('rt1')).toBeUndefined();
-		expect(s.getRefreshToken('rt2')).toBeUndefined();
-		expect(s.getRefreshToken('rt3')?.userKey).toBe('u2');
-	});
-});
-
 describe('OAuthStorage.cleanup', () => {
-	it('evicts expired codes, pending auths and refresh tokens', () => {
+	it('evicts expired codes and pending auths', () => {
 		const s = new OAuthStorage();
-		s.storeAuthorizationCode('c-expired', 'c1', 'http://localhost:1/cb', 'x', 'S256', 'u', -1);
-		s.storeAuthorizationCode('c-live', 'c1', 'http://localhost:1/cb', 'x', 'S256', 'u', 60_000);
+		s.storeAuthorizationCode(
+			'c-expired',
+			'c1',
+			'http://localhost:1/cb',
+			'x',
+			'S256',
+			'u',
+			CREATIO,
+			-1,
+		);
+		s.storeAuthorizationCode(
+			'c-live',
+			'c1',
+			'http://localhost:1/cb',
+			'x',
+			'S256',
+			'u',
+			CREATIO,
+			60_000,
+		);
 		s.storePendingAuthorization(
 			'p-expired',
 			{
@@ -115,14 +111,10 @@ describe('OAuthStorage.cleanup', () => {
 			},
 			-1,
 		);
-		s.storeRefreshToken('rt-expired', 'u', 'c1', -1);
-		s.storeRefreshToken('rt-live', 'u', 'c1', 60_000);
 		s.addClient(client('c1'));
 		s.cleanup();
 		expect(s.getAuthorizationCode('c-expired')).toBeUndefined();
 		expect(s.getAuthorizationCode('c-live')).toBeDefined();
-		expect(s.getRefreshToken('rt-expired')).toBeUndefined();
-		expect(s.getRefreshToken('rt-live')).toBeDefined();
 		// Live client (created now) survives the TTL sweep.
 		expect(s.hasClient('c1')).toBe(true);
 	});

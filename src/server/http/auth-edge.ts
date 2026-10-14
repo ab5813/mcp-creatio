@@ -76,9 +76,10 @@ class BrokerAuthEdge implements AuthEdge {
 	}
 
 	public cleanup(): void {
-		// Broker keeps transient state (codes, pending auths, user tokens) — keep the maps bounded.
+		// Broker keeps only transient state (codes, pending auths, recent refreshes, rejected Creatio
+		// tokens) — keep the maps bounded.
 		this._oauth.cleanup();
-		void this._session.evictStaleTokens();
+		this._session.evictRejectedCreatioTokens();
 	}
 }
 

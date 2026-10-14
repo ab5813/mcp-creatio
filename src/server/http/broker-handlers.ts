@@ -1,7 +1,7 @@
 import { CreatioOAuthClient } from '../../creatio';
 import log from '../../log';
 import { SessionContext } from '../../sessions';
-import { generatePkcePair } from '../../utils';
+import { InjectedCredential, generatePkcePair } from '../../utils';
 import { buildProtectedResourceMetadata, inspectBearer } from '../bearer';
 import { OAuthServer, OAuthValidators } from '../oauth';
 
@@ -104,19 +104,16 @@ export class BrokerHandlers {
 	}
 
 	/**
-	 * Guards `/mcp`: validates the token THIS server issued, confirms we still hold the user's
-	 * brokered Creatio tokens, and exposes the `userKey`. The Creatio tokens are kept in memory and
-	 * are therefore lost on restart, while the token we issued (a stateless JWT) survives — so a
-	 * reconnecting client looks authenticated but every Creatio call would fail. When the tokens are
-	 * gone we answer `401` with `error="invalid_token"` so the client transparently re-runs OAuth.
+	 * Guards `/mcp`: verifies the token THIS server issued and opens the Creatio access token sealed
+	 * inside it, which becomes the request's credential. Nothing is looked up server-side, so a
+	 * restart or another replica serves the request just the same. A token that is invalid, expired
+	 * or whose Creatio token Creatio already rejected gets `401 invalid_token`, which tells the
+	 * client to refresh (or re-authorize).
 	 */
 	public mcpAuth() {
 		return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
 			const header = req.headers.authorization;
-			const userKey = header?.startsWith('Bearer ')
-				? this._oauth.validateAccessToken(header.slice(7), tokenAudience(req))
-				: null;
-			if (!userKey) {
+			if (!header?.startsWith('Bearer ')) {
 				this._challenge(
 					req,
 					res,
@@ -124,16 +121,19 @@ export class BrokerHandlers {
 				);
 				return;
 			}
-			if (!(await this._session.getTokensForUser(userKey))) {
+			const access = this._oauth.verifyAccessToken(header.slice(7), tokenAudience(req));
+			if (!access || this._session.isCreatioTokenRejected(access.creatioAccessToken)) {
 				this._challenge(
 					req,
 					res,
-					'Session expired; the server no longer holds your Creatio tokens. Re-authorize to continue.',
+					'Access token invalid or expired. Refresh it or re-authorize.',
 					'invalid_token',
 				);
 				return;
 			}
-			(req as Request & { userKey?: string }).userKey = userKey;
+			const authed = req as Request & { userKey?: string; credential?: InjectedCredential };
+			authed.userKey = access.userKey;
+			authed.credential = { kind: 'bearer', token: access.creatioAccessToken };
 			next();
 		};
 	}
@@ -208,7 +208,6 @@ export class BrokerHandlers {
 				pending.creatio_verifier,
 			);
 			const userKey = inspectBearer(tokens.accessToken).userKey;
-			await this._session.setTokensForUser(userKey, tokens);
 			const lifetimeSec = Math.round((tokens.accessTokenExpiryMs - Date.now()) / 1000);
 			if (tokens.refreshToken) {
 				log.info('broker.login', { userKey, lifetimeSec, hasRefreshToken: true });
@@ -227,6 +226,7 @@ export class BrokerHandlers {
 				pending.code_challenge,
 				pending.code_challenge_method,
 				userKey,
+				tokens,
 			);
 			const target = new URL(pending.redirect_uri);
 			target.searchParams.set('code', mcpCode);
@@ -243,11 +243,10 @@ export class BrokerHandlers {
 	public async handleToken(req: Request, res: Response): Promise<void> {
 		const body = req.body ?? {};
 		const aud = tokenAudience(req);
-		const sessionStillHeld = (userKey: string): Promise<boolean> =>
-			this._session.getTokensForUser(userKey).then(Boolean);
+		const refreshCreatio = (crt: string) => this._creatio.refresh(crt);
 		const result =
 			body.grant_type === 'refresh_token'
-				? await this._oauth.exchangeRefreshToken(body, aud, sessionStillHeld)
+				? await this._oauth.exchangeRefreshToken(body, aud, refreshCreatio)
 				: await this._oauth.exchangeCodeForToken(body, aud);
 		if ('error' in result) {
 			res.status(400).json(result);
@@ -257,24 +256,28 @@ export class BrokerHandlers {
 	}
 
 	/**
-	 * RFC 7009 token revocation / logout: invalidate the user's brokered session. Resolve the user
-	 * from the presented token, revoke their Creatio token upstream (best-effort), and purge the
-	 * server-side Creatio tokens + our issued refresh tokens. Always answers 200 — even for an
-	 * unknown token — so it is not a token-validity oracle.
+	 * RFC 7009 token revocation / logout. A refresh token carries the user's Creatio refresh token,
+	 * which is revoked upstream (best-effort) — that ends the session for every token derived from
+	 * it. An access token's Creatio token is marked rejected so it stops working here at once.
+	 * Always answers 200 — even for an unknown token — so it is not a token-validity oracle.
 	 */
 	public async handleRevoke(req: Request, res: Response): Promise<void> {
 		const token = String((req.body ?? {}).token ?? '');
-		if (token) {
-			const userKey = this._oauth.resolveUserFromToken(token, tokenAudience(req));
-			if (userKey) {
-				const stored = await this._session.getTokensForUser(userKey);
-				if (stored?.refreshToken) {
-					await this._creatio.revoke(stored.refreshToken);
-				}
-				await this._session.deleteTokensForUser(userKey);
-				this._oauth.purgeRefreshTokensForUser(userKey);
-				log.info('broker.revoke', { userKey });
-			}
+		const target = token
+			? this._oauth.resolveRevocationTarget(token, tokenAudience(req))
+			: null;
+		if (target?.kind === 'refresh') {
+			this._oauth.forgetRecentRefresh(target.creatioRefreshToken);
+			await this._creatio.revoke(target.creatioRefreshToken);
+		} else if (target?.kind === 'access') {
+			const { expSeconds } = inspectBearer(token);
+			this._session.markCreatioTokenRejected(
+				target.creatioAccessToken,
+				(expSeconds ?? Date.now() / 1000 + 3600) * 1000,
+			);
+		}
+		if (target) {
+			log.info('broker.revoke', { userKey: target.userKey, kind: target.kind });
 		}
 		res.status(200).json({});
 	}

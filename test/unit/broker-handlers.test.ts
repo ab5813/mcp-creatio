@@ -115,10 +115,6 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		expect(clientRedirect.searchParams.get('state')).toBe('client-state-1');
 		const ourCode = clientRedirect.searchParams.get('code')!;
 		expect(ourCode).toBeTruthy();
-		// Creatio tokens stored under the user derived from the token's sub.
-		expect(
-			(await SessionContext.instance.getTokensForUser('creatio-user-1'))?.accessToken,
-		).toBe(creatioToken);
 
 		// 4) Client exchanges OUR code (+ its verifier) for OUR token.
 		const tokRes = res();
@@ -137,26 +133,33 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		const ourToken = (tokRes.jsonBody as { access_token: string }).access_token;
 		expect(ourToken).toBeTruthy();
 
-		// 5) /mcp guard accepts OUR token (Creatio tokens still held) and exposes the userKey.
+		// 5) /mcp guard accepts OUR token, exposes the userKey and hands the request the Creatio
+		//    access token it opened from the token — nothing was stored server-side.
 		const next = vi.fn();
 		const guardReq = req({ headers: { authorization: `Bearer ${ourToken}` } });
 		await h.mcpAuth()(guardReq as never, res() as never, next);
 		expect(next).toHaveBeenCalled();
 		expect(guardReq.userKey).toBe('creatio-user-1');
+		expect(guardReq.credential).toEqual({ kind: 'bearer', token: creatioToken });
 
-		// 6) After the broker loses its in-memory Creatio tokens (e.g. a restart), the SAME valid
-		//    client token is challenged with invalid_token so the client re-runs OAuth.
-		await SessionContext.instance.deleteTokensForUser('creatio-user-1');
+		// 6) A restarted broker (fresh instance, same secret) serves the SAME token unchanged.
 		const next2 = vi.fn();
-		const r2 = res();
+		const restartedReq = req({ headers: { authorization: `Bearer ${ourToken}` } });
+		await makeHandlers().mcpAuth()(restartedReq as never, res() as never, next2);
+		expect(next2).toHaveBeenCalled();
+		expect(restartedReq.credential).toEqual({ kind: 'bearer', token: creatioToken });
+
+		// 7) A garbage token is challenged with invalid_token (the client refreshes / re-auths).
+		const next3 = vi.fn();
+		const r3 = res();
 		await h.mcpAuth()(
-			req({ headers: { authorization: `Bearer ${ourToken}` } }) as never,
-			r2 as never,
-			next2,
+			req({ headers: { authorization: 'Bearer not-ours' } }) as never,
+			r3 as never,
+			next3,
 		);
-		expect(next2).not.toHaveBeenCalled();
-		expect(r2.statusCode).toBe(401);
-		expect((r2.headers as Record<string, string>)['WWW-Authenticate']).toContain(
+		expect(next3).not.toHaveBeenCalled();
+		expect(r3.statusCode).toBe(401);
+		expect((r3.headers as Record<string, string>)['WWW-Authenticate']).toContain(
 			'error="invalid_token"',
 		);
 	});
@@ -173,7 +176,7 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		expect(next).not.toHaveBeenCalled();
 	});
 
-	it('refresh_token grant rotates and re-issues without re-auth (while session held)', async () => {
+	it('refresh_token grant refreshes Creatio and re-issues without re-auth', async () => {
 		const h = makeHandlers();
 		const regRes = res();
 		h.handleRegister(
@@ -225,7 +228,16 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		const issued = tokRes.jsonBody as { access_token: string; refresh_token: string };
 		expect(issued.refresh_token).toBeTruthy();
 
-		// Refresh while the broker still holds the Creatio tokens → fresh access + ROTATED refresh.
+		// Refresh → the broker refreshes Creatio with the sealed Creatio refresh token.
+		const refreshedCreatio = jwt.sign({ sub: 'refresh-user' }, 'irrelevant', {
+			expiresIn: 3600,
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				jsonOk({ access_token: refreshedCreatio, refresh_token: 'RT2', expires_in: 3600 }),
+			),
+		);
 		const refRes = res();
 		await h.handleToken(
 			req({
@@ -240,23 +252,19 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		const refreshed = refRes.jsonBody as { access_token: string; refresh_token: string };
 		expect(refreshed.access_token).toBeTruthy();
 		expect(refreshed.refresh_token).not.toBe(issued.refresh_token);
+		const body = String(vi.mocked(fetch).mock.calls[0]?.[1]?.body ?? '');
+		expect(body).toContain('grant_type=refresh_token');
+		expect(body).toContain('refresh_token=RT');
+		const next = vi.fn();
+		const guardReq = req({ headers: { authorization: `Bearer ${refreshed.access_token}` } });
+		await h.mcpAuth()(guardReq as never, res() as never, next);
+		expect(guardReq.credential).toEqual({ kind: 'bearer', token: refreshedCreatio });
 
-		// The old refresh token is single-use — reusing it now fails.
-		const reuseRes = res();
-		await h.handleToken(
-			req({
-				body: {
-					grant_type: 'refresh_token',
-					refresh_token: issued.refresh_token,
-					client_id: clientId,
-				},
-			}) as never,
-			reuseRes as never,
+		// Once Creatio rejects the Creatio refresh token, the refresh fails → client re-auths.
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 400 })),
 		);
-		expect(reuseRes.statusCode).toBe(400);
-
-		// Once the broker loses the Creatio tokens, even a valid refresh token is rejected (re-auth).
-		await SessionContext.instance.deleteTokensForUser('refresh-user');
 		const goneRes = res();
 		await h.handleToken(
 			req({
@@ -349,7 +357,7 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 		expect(badRes.statusCode).toBe(401);
 	});
 
-	it('revoke (RFC 7009) purges local tokens + calls Creatio revocation, always 200', async () => {
+	it('revoke (RFC 7009): refresh token → Creatio revocation, access token → rejected here; always 200', async () => {
 		const h = makeHandlers();
 		const regRes = res();
 		h.handleRegister(
@@ -401,8 +409,8 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 			}) as never,
 			tokRes as never,
 		);
-		const ourToken = (tokRes.jsonBody as { access_token: string }).access_token;
-		expect(await SessionContext.instance.getTokensForUser('revoke-user')).not.toBeNull();
+		const issued = tokRes.jsonBody as { access_token: string; refresh_token: string };
+		const ourToken = issued.access_token;
 
 		// Capture the upstream Creatio revocation call.
 		const calls: string[] = [];
@@ -413,13 +421,19 @@ describe('BrokerHandlers — full authorization_code broker flow', () => {
 				return new Response('', { status: 200 });
 			}),
 		);
+		// Revoking the refresh token revokes the Creatio refresh token it carries, upstream.
 		const revRes = res();
-		await h.handleRevoke(req({ body: { token: ourToken } }) as never, revRes as never);
+		await h.handleRevoke(
+			req({ body: { token: issued.refresh_token } }) as never,
+			revRes as never,
+		);
 		expect(revRes.statusCode).toBe(200);
-		// Upstream revocation hit /connect/revocation with the stored Creatio refresh token.
 		expect(calls.some((c) => c.includes('/connect/revocation') && c.includes('RT'))).toBe(true);
-		// Local Creatio tokens purged; the issued client token no longer maps to a held session.
-		expect(await SessionContext.instance.getTokensForUser('revoke-user')).toBeNull();
+
+		// Revoking the access token makes the guard reject it from now on.
+		const revAccessRes = res();
+		await h.handleRevoke(req({ body: { token: ourToken } }) as never, revAccessRes as never);
+		expect(revAccessRes.statusCode).toBe(200);
 		const next = vi.fn();
 		const guardRes = res();
 		await h.mcpAuth()(

@@ -158,8 +158,9 @@ describe('broker HTTP API (full stack via supertest)', () => {
 		expect(tok.body.access_token).toBeTruthy();
 		expect(tok.body.refresh_token).toBeTruthy();
 
-		// Refresh works while the session is held.
-		const refreshed = await request(app).post('/token').type('form').send({
+		// Refresh works with no server-side state — even on a brand-new instance (restart / replica).
+		const restarted = brokerApp();
+		const refreshed = await request(restarted).post('/token').type('form').send({
 			grant_type: 'refresh_token',
 			refresh_token: tok.body.refresh_token,
 			client_id: clientId,
@@ -167,17 +168,66 @@ describe('broker HTTP API (full stack via supertest)', () => {
 		expect(refreshed.status).toBe(200);
 		expect(refreshed.body.refresh_token).not.toBe(tok.body.refresh_token);
 
-		// Revoke (RFC 7009) → 200, and the rotated refresh token no longer works.
-		const rev = await request(app)
+		// Revoke (RFC 7009) a refresh token → 200, and its Creatio refresh token is revoked upstream.
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockClear();
+		const rev = await request(restarted)
 			.post('/revoke')
 			.type('form')
-			.send({ token: refreshed.body.access_token });
+			.send({ token: refreshed.body.refresh_token });
 		expect(rev.status).toBe(200);
-		const afterRevoke = await request(app).post('/token').type('form').send({
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/connect/revocation');
+
+		// Creatio now rejects that refresh token → the broker answers invalid_grant (client re-auths).
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 400 })),
+		);
+		const afterRevoke = await request(restarted).post('/token').type('form').send({
 			grant_type: 'refresh_token',
 			refresh_token: refreshed.body.refresh_token,
 			client_id: clientId,
 		});
 		expect(afterRevoke.status).toBe(400);
+		expect(afterRevoke.body.error).toBe('invalid_grant');
+	});
+
+	it('revoking an access token makes /mcp answer 401 invalid_token for it', async () => {
+		const app = brokerApp();
+		const reg = await request(app)
+			.post('/register')
+			.send({ redirect_uris: [CLIENT_REDIRECT] });
+		const clientId = reg.body.client_id as string;
+		const { verifier, challenge } = await generatePkcePair();
+		const auth = await request(app).get('/authorize').query({
+			client_id: clientId,
+			redirect_uri: CLIENT_REDIRECT,
+			response_type: 'code',
+			code_challenge: challenge,
+			code_challenge_method: 'S256',
+		});
+		const brokerState = new URL(auth.headers.location).searchParams.get('state')!;
+		stubCreatioToken('api-user');
+		const cb = await request(app)
+			.get('/oauth/callback')
+			.query({ code: 'creatio-code', state: brokerState });
+		const tok = await request(app)
+			.post('/token')
+			.type('form')
+			.send({
+				grant_type: 'authorization_code',
+				code: new URL(cb.headers.location).searchParams.get('code'),
+				redirect_uri: CLIENT_REDIRECT,
+				client_id: clientId,
+				code_verifier: verifier,
+			});
+		await request(app).post('/revoke').type('form').send({ token: tok.body.access_token });
+		const res = await request(app)
+			.post('/mcp')
+			.set('Authorization', `Bearer ${tok.body.access_token}`)
+			.set('Accept', 'application/json, text/event-stream')
+			.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+		expect(res.status).toBe(401);
+		expect(res.headers['www-authenticate']).toContain('invalid_token');
 	});
 });

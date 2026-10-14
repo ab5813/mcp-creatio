@@ -1,4 +1,4 @@
-import { getCreatioClientConfig, getTokenStoreConfig } from './config-builder';
+import { getCreatioClientConfig } from './config-builder';
 import { HTTP_MCP_PORT } from './consts';
 import {
 	AuthProviderType,
@@ -14,13 +14,11 @@ import {
 	installHttpAgent,
 	keepAliveIntervalMs,
 } from './server';
-import { SessionContext, TokenStore, createTokenStore } from './sessions';
 import { envBool } from './utils';
 import { BUILD_INFO, NAME, VERSION } from './version';
 
 let _httpInstance: HttpServer | undefined;
 let _keepAlive: SessionKeepAlive | undefined;
-let _tokenStore: TokenStore | undefined;
 
 /** Single shared Creatio session exists only for legacy / client_credentials — the modes the
  *  proactive keep-alive applies to (broker/delegated/gateway are per-user / per-request). */
@@ -48,14 +46,12 @@ async function main() {
 		crudBackend: cfg.crudBackend,
 		allowedRedirectOrigins: process.env['CREATIO_MCP_ALLOWED_REDIRECT_ORIGINS'] || '(none)',
 	});
-	// Broker holds users' Creatio tokens server-side; a Redis store makes that stateless +
-	// restart-durable + multi-instance (default stays in-memory). Only broker mode needs it.
-	if (cfg.auth.kind === AuthProviderType.Broker) {
-		const tokenStoreConfig = getTokenStoreConfig();
-		if (tokenStoreConfig.kind === 'redis') {
-			_tokenStore = await createTokenStore(tokenStoreConfig);
-			SessionContext.instance.setTokenStore(_tokenStore);
-		}
+	// The broker keeps no per-user state any more (Creatio tokens travel sealed inside the tokens it
+	// issues), so the former Redis token store is gone; flag a leftover config instead of ignoring it.
+	if (process.env['CREATIO_MCP_TOKEN_STORE'] || process.env['CREATIO_MCP_REDIS_URL']) {
+		log.warn('config.token_store.ignored', {
+			hint: 'CREATIO_MCP_TOKEN_STORE / CREATIO_MCP_REDIS_URL are no longer used; the broker is stateless',
+		});
 	}
 	const provider = new CreatioServiceContext(cfg);
 	const readonlyMode = envBool('CREATIO_MCP_READONLY', false);
@@ -93,7 +89,6 @@ async function shutdown(signal?: string) {
 		log.appStop({ reason: signal || 'shutdown' });
 		_keepAlive?.stop();
 		await _httpInstance?.stop();
-		await _tokenStore?.close();
 	} catch (err) {
 		log.error('shutdown.error', { error: String(err) });
 	} finally {

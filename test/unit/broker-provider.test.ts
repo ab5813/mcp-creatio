@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { AuthProviderType } from '../../src/creatio';
 import { BrokerProvider } from '../../src/creatio/auth/providers/broker-provider';
@@ -6,154 +6,60 @@ import { SessionContext } from '../../src/sessions/session-context';
 import { runWithContext } from '../../src/utils';
 import { resetSessionContext } from '../support/test-server';
 
-function config() {
-	return {
+function provider() {
+	return new BrokerProvider({
 		baseUrl: 'https://t.creatio.local',
 		auth: { kind: AuthProviderType.Broker, clientId: 'app-1', jwtSecret: 'jwt' },
-	} as never;
-}
-function jsonOk(body: unknown) {
-	return new Response(JSON.stringify(body), {
-		status: 200,
-		headers: { 'content-type': 'application/json' },
-	});
+	} as never);
 }
 
-afterEach(() => vi.unstubAllGlobals());
+const withToken = <T>(token: string, fn: () => Promise<T>) =>
+	runWithContext({ userKey: 'u1', credential: { kind: 'bearer', token } }, fn);
 
-describe('BrokerProvider — serves stored per-user Creatio tokens', () => {
-	it('returns the stored valid token without a network call', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'AT',
-			accessTokenExpiryMs: Date.now() + 3_600_000,
-		});
-		const fetchMock = vi.fn();
-		vi.stubGlobal('fetch', fetchMock);
-		const headers = await runWithContext({ userKey: 'u1' }, () =>
-			new BrokerProvider(config()).getHeaders('application/json', true),
+describe('BrokerProvider — attaches the Creatio token the edge opened from the request', () => {
+	it('uses the per-request Creatio access token, no store and no network', async () => {
+		const headers = await withToken('CREATIO-AT', () =>
+			provider().getHeaders('application/json', true),
 		);
-		expect(headers.Authorization).toBe('Bearer AT');
-		expect(fetchMock).not.toHaveBeenCalled();
+		expect(headers.Authorization).toBe('Bearer CREATIO-AT');
+		expect(headers['Content-Type']).toBe('application/json');
 	});
 
-	it('refreshes an expired token via the refresh token and persists it', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'old',
-			accessTokenExpiryMs: Date.now() - 1000,
-			refreshToken: 'RT',
-		});
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () =>
-				jsonOk({ access_token: 'fresh', refresh_token: 'RT2', expires_in: 3600 }),
-			),
-		);
-		const headers = await runWithContext({ userKey: 'u1' }, () =>
-			new BrokerProvider(config()).getHeaders('application/json', true),
-		);
-		expect(headers.Authorization).toBe('Bearer fresh');
-		expect((await SessionContext.instance.getTokensForUser('u1'))?.refreshToken).toBe('RT2');
-	});
-
-	it('throws when the user has no stored tokens', async () => {
-		resetSessionContext();
+	it('throws when the request carries no Creatio token', async () => {
 		await expect(
-			runWithContext({ userKey: 'nobody' }, () =>
-				new BrokerProvider(config()).getHeaders('application/json', true),
-			),
+			runWithContext({ userKey: 'u1' }, () => provider().getHeaders('application/json')),
 		).rejects.toThrow(/broker_not_authorized/);
-	});
-
-	it('drops tokens and throws when expired with no refresh token', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'old',
-			accessTokenExpiryMs: Date.now() - 1000,
-		});
-		await expect(
-			runWithContext({ userKey: 'u1' }, () =>
-				new BrokerProvider(config()).getHeaders('application/json', true),
-			),
-		).rejects.toThrow(/broker_token_expired/);
-		expect(await SessionContext.instance.getTokensForUser('u1')).toBeNull();
-	});
-
-	it('throws without a user context', async () => {
-		await expect(
-			new BrokerProvider(config()).getHeaders('application/json', true),
-		).rejects.toThrow(/broker_no_user/);
-	});
-
-	it('refresh() rotates the stored refresh token for the current user', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'old',
-			accessTokenExpiryMs: Date.now() + 3_600_000,
-			refreshToken: 'RT',
-		});
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () =>
-				jsonOk({ access_token: 'fresh', refresh_token: 'RT2', expires_in: 3600 }),
-			),
+		await expect(provider().getHeaders('application/json')).rejects.toThrow(
+			/broker_not_authorized/,
 		);
-		await runWithContext({ userKey: 'u1' }, () => new BrokerProvider(config()).refresh());
-		expect((await SessionContext.instance.getTokensForUser('u1'))?.refreshToken).toBe('RT2');
 	});
 
-	it('refresh() is a no-op without a user context', async () => {
-		await expect(new BrokerProvider(config()).refresh()).resolves.toBeUndefined();
+	it('refresh() is a no-op (the client refreshes through /token)', async () => {
+		await expect(withToken('AT', () => provider().refresh())).resolves.toBeUndefined();
+	});
+
+	it('invalidate() marks the request token rejected so the edge challenges the next request', async () => {
+		resetSessionContext();
+		expect(SessionContext.instance.isCreatioTokenRejected('AT')).toBe(false);
+		await withToken('AT', () => provider().invalidate());
+		expect(SessionContext.instance.isCreatioTokenRejected('AT')).toBe(true);
+		expect(SessionContext.instance.isCreatioTokenRejected('OTHER')).toBe(false);
+	});
+
+	it('invalidate() without a request token does nothing', async () => {
+		resetSessionContext();
+		await expect(provider().invalidate()).resolves.toBeUndefined();
 	});
 });
 
-describe('BrokerProvider — dead Creatio tokens force re-authorization', () => {
-	it('drops the stored tokens when Creatio rejects the refresh token', async () => {
+describe('SessionContext rejected Creatio tokens', () => {
+	it('evicts entries once their token has expired', () => {
 		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'old',
-			accessTokenExpiryMs: Date.now() - 1000,
-			refreshToken: 'RT',
-		});
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 400 })),
-		);
-		await expect(
-			runWithContext({ userKey: 'u1' }, () =>
-				new BrokerProvider(config()).getHeaders('application/json', true),
-			),
-		).rejects.toThrow(/creatio_oauth_refresh_error:400/);
-		expect(await SessionContext.instance.getTokensForUser('u1')).toBeNull();
-	});
-
-	it('keeps the stored tokens when the refresh fails transiently', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'old',
-			accessTokenExpiryMs: Date.now() - 1000,
-			refreshToken: 'RT',
-		});
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response('down', { status: 503 })),
-		);
-		await expect(
-			runWithContext({ userKey: 'u1' }, () =>
-				new BrokerProvider(config()).getHeaders('application/json', true),
-			),
-		).rejects.toThrow(/creatio_oauth_refresh_error:503/);
-		expect(await SessionContext.instance.getTokensForUser('u1')).not.toBeNull();
-	});
-
-	it('invalidate() drops the current user tokens', async () => {
-		resetSessionContext();
-		await SessionContext.instance.setTokensForUser('u1', {
-			accessToken: 'AT',
-			accessTokenExpiryMs: Date.now() + 3_600_000,
-		});
-		await runWithContext({ userKey: 'u1' }, () => new BrokerProvider(config()).invalidate());
-		expect(await SessionContext.instance.getTokensForUser('u1')).toBeNull();
+		const sc = SessionContext.instance;
+		sc.markCreatioTokenRejected('old', 1_000);
+		sc.markCreatioTokenRejected('live', 5_000);
+		expect(sc.evictRejectedCreatioTokens(2_000)).toBe(1);
+		expect(sc.isCreatioTokenRejected('old')).toBe(false);
+		expect(sc.isCreatioTokenRejected('live')).toBe(true);
 	});
 });

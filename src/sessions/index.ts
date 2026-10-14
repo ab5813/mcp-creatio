@@ -1,2 +1,2 @@
 export * from './session-context';
-export * from './token-store';
+export * from './token-crypto';

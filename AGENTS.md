@@ -44,7 +44,7 @@ Two entry points, one `Server` core:
 
 - **HTTP web service** — `src/index.ts` (`npm start`) → `HttpServer` on `CREATIO_MCP_PORT` (default
   3000), MCP over Streamable HTTP at `/mcp`. The multi-user transport, serving three HTTP auth
-  modes: **`broker`** (the MCP is its own OAuth 2.1 AS and holds users' Creatio tokens),
+  modes: **`broker`** (the MCP is its own OAuth 2.1 AS; users' Creatio tokens travel sealed in the tokens it issues),
   **`delegated`** (default — client brings the token), and **`gateway`** (a Control-Plane injects
   it). Config from env (`getCreatioClientConfig`); HTTP defaults to `delegated` when no auth is set.
 - **stdio** — `src/cli.ts` (the npm `bin` `mcp-creatio`; `npm run start:stdio`) → `StdioServerTransport`.
@@ -345,7 +345,7 @@ consent flow is the point of the mode:
 ```bash
 CREATIO_MCP_AUTH_MODE=broker CREATIO_BASE_URL=… CREATIO_CLIENT_ID=… \
 CREATIO_CLIENT_SECRET=…           # only for a confidential Creatio app
-CREATIO_MCP_JWT_SECRET=…          # ≥32 chars; required in prod; set it so client tokens survive a restart
+CREATIO_MCP_JWT_SECRET=…          # ≥32 chars; required in prod; signs + seals client tokens (keep stable)
 NODE_TLS_REJECT_UNAUTHORIZED=0 node dist/index.js
 ```
 
@@ -353,9 +353,9 @@ Point the client at `http://localhost:3000/mcp`; it discovers the AS (RFC 9728/8
 (DCR), and opens the browser for Creatio login. Verify in logs: `/oauth/callback → 302` (no
 `broker.creatio.exchange_failed`) → `session.connect` → `mcp.prepare … enabled:true`. The same Creatio
 app works public (PKCE only), confidential (`+ client_secret`), and with "Enforce PKCE" on/off — the
-broker always sends S256 PKCE. After a restart the in-memory Creatio tokens are gone, so the client's
-still-valid JWT gets `401 invalid_token` → it must re-authorize (in Claude Code: **Clear
-authentication** → reconnect).
+broker always sends S256 PKCE. A restart changes nothing for a connected client (the broker is
+stateless); only a changed `CREATIO_MCP_JWT_SECRET` invalidates issued tokens (`401 invalid_token`
+→ the client refreshes / re-authorizes).
 
 **`client_credentials` / `legacy` / `delegated` / `gateway` — drive with a direct handshake.** These
 have no per-user OAuth, so a plain MCP client can't trigger a login; test them with a raw
@@ -429,15 +429,19 @@ If adding new auth provider:
 > sharing the secret; the signing secret (`CREATIO_MCP_JWT_SECRET`) must be ≥32 chars and is required
 > in production.
 >
-> **Broker token store + prod.** Default `InMemoryTokenStore` (lost on restart — a `401 invalid_token`
-> then makes the client re-authorize; single instance only). For production set
-> `CREATIO_MCP_TOKEN_STORE=redis` + `CREATIO_MCP_REDIS_URL`: `RedisTokenStore` (lazy `redis` dep)
-> encrypts tokens at rest (AES-256-GCM, `token-crypto.ts`; key from `CREATIO_MCP_TOKEN_ENC_KEY` else
-> derived from the JWT secret) with native per-key TTL → stateless, restart-durable, multi-instance.
+> **Stateless broker (no token store).** The broker keeps no per-user state: `TokenSealer`
+> (`server/oauth/sealed-tokens.ts`, AES-256-GCM via `token-crypto.ts`, key derived from the JWT
+> secret) seals the Creatio ACCESS token into the issued JWT (`ct` claim; `expires_in` capped at the
+> Creatio token's lifetime) and the Creatio REFRESH token into an opaque `rt1.` refresh token. The
+> edge opens `ct` per request into the request's injected bearer credential, which `BrokerProvider`
+> attaches; the `/token` refresh grant refreshes Creatio with the sealed refresh token (single-flight
+> per Creatio refresh token for 60 s). Restart-durable and multi-instance with a shared secret.
+> Creatio rejecting a still-valid token → `BrokerProvider.invalidate()` marks it in
+> `SessionContext`'s rejected-token list → next `/mcp` call gets `401 invalid_token`.
 > Behind a TLS-terminating proxy set `CREATIO_MCP_PUBLIC_URL` so `iss`/`aud`/redirects/discovery use
 > the external origin (`resolvePublicOrigin`), not the internal hop. Logout = **RFC 7009** `POST
-/revoke` (`revocation_endpoint`): revokes the Creatio token upstream (`/connect/revocation`,
-> best-effort) + purges the server-side + issued-refresh tokens; always answers 200.
+/revoke` (`revocation_endpoint`): a refresh token → its Creatio refresh token is revoked upstream
+> (`/connect/revocation`, best-effort); an access token → rejected by this instance; always 200.
 >
 > In **`delegated`/`gateway`** the MCP stores nothing and does **not** cryptographically verify the
 > credential — both are **fully-trusted-environment** modes (Creatio is the authority; the request's
@@ -517,7 +521,6 @@ unit for pure logic (translators, value-type, filters) and full-stack/API for wi
 
 ## 18. Future Enhancements (Suggestions)
 
-- Implement persistent token storage (e.g., file/Redis) for broker-held Creatio tokens (today in-memory in `SessionContext`, lost on restart).
 - Provide structured error codes instead of raw messages.
 - Raise branch coverage toward 90% and wire `npm test` into CI.
 - Live-regress the DataService backend against a real environment, then consider dropping the

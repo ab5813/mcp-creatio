@@ -6,6 +6,33 @@ All notable changes to **mcp-creatio** are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-14
+
+The broker no longer keeps any per-user state, so restarts, redeploys and extra replicas no longer
+log users out.
+
+### Changed
+
+- **Stateless broker: Creatio tokens are sealed into the issued tokens** — instead of holding each
+  user's Creatio tokens in memory (or Redis), the broker seals them into the tokens it hands the
+  client (AES-256-GCM, key derived from `CREATIO_MCP_JWT_SECRET`). The access token carries the
+  Creatio access token and its lifetime is capped at it; the refresh token carries the Creatio
+  refresh token, and the refresh grant refreshes Creatio with it. Previously a restart wiped every
+  login and web clients such as Open WebUI then failed with "Failed to connect to MCP server" until
+  the user re-authorized by hand. Every instance only needs the same `CREATIO_MCP_JWT_SECRET`.
+- **Revocation** — revoking a refresh token revokes its Creatio refresh token upstream; revoking an
+  access token makes the instance reject it.
+
+### Removed
+
+- **Redis token store** (`CREATIO_MCP_TOKEN_STORE`, `CREATIO_MCP_REDIS_URL`,
+  `CREATIO_MCP_TOKEN_ENC_KEY`) and the `redis` dependency — no longer needed. A leftover setting is
+  reported at startup (`config.token_store.ignored`) and otherwise ignored.
+
+### Upgrade note
+
+Tokens issued before 0.8.0 are not accepted: each user re-authorizes once after the upgrade.
+
 ## [0.7.1] — 2026-10-14
 
 Fixes the crash that logged Open WebUI users out after every message, adds the entity allowlist,

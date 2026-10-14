@@ -101,13 +101,13 @@ One unified selector — `CREATIO_MCP_AUTH_MODE` — picks how a request proves 
 When unset it is inferred from the credentials you provide. The HTTP modes are multi-user; stdio is
 single-user.
 
-| Mode                     | Transport    | How identity is established                                                                     | When to use                                                                                  |
-| ------------------------ | ------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **`broker`**             | HTTP         | The MCP is its own OAuth server: it walks the user through Creatio login and holds their tokens | **Standalone direct clients** (Claude Desktop / ChatGPT) — connect → authorize → work as you |
-| **`delegated`**          | HTTP         | The client brings a Creatio token; the MCP validates expiry and passes it through               | Clients that obtain a Creatio token themselves / behind an external AS                       |
-| **`gateway`**            | HTTP         | A trusted Control-Plane injects the token per request                                           | Behind the Creatio.ai Control-Plane (multi-tenant)                                           |
-| **`client_credentials`** | stdio / HTTP | One service account (`client_id` / `secret`)                                                    | M2M / single service identity                                                                |
-| **`legacy`**             | stdio / HTTP | One user (login / password)                                                                     | Local / legacy instances                                                                     |
+| Mode                     | Transport    | How identity is established                                                                              | When to use                                                                                  |
+| ------------------------ | ------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **`broker`**             | HTTP         | The MCP is its own OAuth server: it walks the user through Creatio login (tokens sealed, nothing stored) | **Standalone direct clients** (Claude Desktop / ChatGPT) — connect → authorize → work as you |
+| **`delegated`**          | HTTP         | The client brings a Creatio token; the MCP validates expiry and passes it through                        | Clients that obtain a Creatio token themselves / behind an external AS                       |
+| **`gateway`**            | HTTP         | A trusted Control-Plane injects the token per request                                                    | Behind the Creatio.ai Control-Plane (multi-tenant)                                           |
+| **`client_credentials`** | stdio / HTTP | One service account (`client_id` / `secret`)                                                             | M2M / single service identity                                                                |
+| **`legacy`**             | stdio / HTTP | One user (login / password)                                                                              | Local / legacy instances                                                                     |
 
 > The MCP issues Creatio tokens of its own only in `broker` mode (where it must, to drive the
 > login). `delegated`/`gateway` pass tokens through; `client_credentials`/`legacy` use a single
@@ -130,9 +130,9 @@ the client never needs to reach Creatio's TLS endpoint directly.
 
 The tokens the MCP issues to clients are **audience-bound** (`aud` = this deployment's `/mcp`
 resource, `iss` = its origin), so a token minted by one deployment is rejected by another even when
-they share a secret. The MCP also supports the **`refresh_token` grant** (rotating), so a client
-gets a fresh access token without re-running the browser flow every hour — for as long as the MCP
-still holds that user's Creatio tokens.
+they share a secret. The MCP also supports the **`refresh_token` grant**, so a client gets a fresh
+access token without re-running the browser flow — for as long as Creatio accepts the user's
+Creatio refresh token.
 
 ```bash
 CREATIO_MCP_AUTH_MODE=broker
@@ -148,21 +148,23 @@ CREATIO_MCP_JWT_SECRET=a-long-random-secret-min-32   # signs the tokens the MCP 
 > every restart and are not valid across multiple instances, so **set a stable secret for production
 > or any horizontally-scaled deployment.**
 
-**Persistence / horizontal scaling (broker holds users' Creatio tokens).** By default those tokens
-live in-process — fine for a single instance, but lost on restart and not shared across replicas.
-For production set a **Redis** token store: tokens are encrypted at rest (AES-256-GCM) and survive
-restarts, so the broker becomes stateless and horizontally scalable.
+**Stateless: restarts and replicas lose nothing.** The broker stores no per-user tokens. The
+user's Creatio tokens travel **sealed inside the tokens it issues** (AES-256-GCM, key derived from
+`CREATIO_MCP_JWT_SECRET`; the client can neither read nor alter them):
 
-```bash
-CREATIO_MCP_TOKEN_STORE=redis
-CREATIO_MCP_REDIS_URL=redis://your-redis:6379
-# CREATIO_MCP_TOKEN_ENC_KEY=...   # optional; encryption key, else derived from CREATIO_MCP_JWT_SECRET
-```
+- the **access token** carries the Creatio access token and never outlives it (its `expires_in` is
+  capped at the Creatio token's remaining lifetime, at most 1 h);
+- the **refresh token** carries the Creatio refresh token; a refresh refreshes Creatio with it and
+  returns a new pair.
+
+So a restart, a redeploy or another replica serves existing clients unchanged — every instance
+only needs the same `CREATIO_MCP_JWT_SECRET`. No Redis or other store is required.
 
 **Logout / revocation.** The broker exposes an **RFC 7009** `POST /revoke` endpoint (advertised as
-`revocation_endpoint` in the AS metadata): presenting an issued token revokes the user's Creatio
-token upstream (`/connect/revocation`, best-effort) and purges the server-side Creatio tokens and
-issued refresh tokens. It always answers `200` (no token-validity oracle).
+`revocation_endpoint` in the AS metadata). Presenting a refresh token revokes the Creatio refresh
+token it carries upstream (`/connect/revocation`, best-effort), which ends the session; presenting
+an access token makes this instance reject it from then on. It always answers `200` (no
+token-validity oracle).
 
 Register the Creatio app in System Designer → _OAuth 2.0 applications_ → _On behalf of a user_, and
 add the MCP callback (`http://localhost:3000/oauth/callback` for a local run) to its redirect URIs.
